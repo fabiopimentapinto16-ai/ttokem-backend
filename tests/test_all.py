@@ -14,7 +14,7 @@ except ModuleNotFoundError:
         get = post = _d
     class HTTPException(Exception):
         def __init__(self, status_code, detail=""): self.status_code, self.detail = status_code, detail
-    fa.FastAPI, fa.HTTPException = (lambda **k: _App()), HTTPException
+    fa.FastAPI, fa.HTTPException, fa.Request = (lambda **k: _App()), HTTPException, object
     cors.CORSMiddleware = object
     sys.modules.update({"fastapi": fa, "fastapi.middleware": mw, "fastapi.middleware.cors": cors})
 
@@ -44,8 +44,9 @@ def ok(text): return Resp(200, {"choices": [{"message": {"content": text}}]})
 class Base(unittest.TestCase):
     def setUp(self):
         clean = {k: v for k, v in os.environ.items()
-                 if not (k.endswith(("_API_KEY", "_API_KEYS", "_KEY")) or
-                         k in ("VIDEO_PROVIDERS", "PROXY_URL", "LLM_ORDER"))}
+                 if not (k.endswith(("_API_KEY", "_API_KEYS", "_KEY", "_TOKEN")) or
+                         k in ("VIDEO_PROVIDERS", "PROXY_URL", "LLM_ORDER", "FAL_KEY", "MPT_URL",
+                                   "REPLICATE_API_TOKEN", "VIDEO_ORDER", "MAGIC_HOUR_API_KEY"))}
         p = mock.patch.dict(os.environ, clean, clear=True)
         p.start(); self.addCleanup(p.stop)
 
@@ -106,8 +107,102 @@ class TestVideo(Base):
         post = lambda url, **kw: Resp(429) if "//a/" in url else Resp(200, {"id": "j1"})
         get = lambda url, **kw: Resp(200, {"status": "completed"})
         with mock.patch.object(video.requests, "post", post), mock.patch.object(video.requests, "get", get):
-            url, who = video.VideoMaestro(poll_every=0).generate("a cat")
+            url, who, dl = video.VideoMaestro(poll_every=0).generate("a cat")
         self.assertEqual(url, "http://b/v1/videos/j1/content"); self.assertEqual(who, "http://b/v1")
+        self.assertIsNone(dl)
+
+    def test_fal_fluxo_queue(self):
+        os.environ["FAL_KEY"] = "fk"
+        seen = {}
+        def post(url, **kw):
+            seen["url"], seen["hdr"], seen["body"] = url, kw["headers"], kw["json"]
+            return Resp(200, {"request_id": "r1", "status_url": "https://queue.fal.run/x/requests/r1/status",
+                              "response_url": "https://queue.fal.run/x/requests/r1"})
+        def get(url, **kw):
+            if url.endswith("/status"): return Resp(200, {"status": "COMPLETED"})
+            return Resp(200, {"video": {"url": "https://v3.fal.media/a.mp4"}})
+        with mock.patch("requests.post", post), mock.patch("requests.get", get):
+            url, who, dl = video.VideoMaestro(poll_every=0).generate("a cat")
+        self.assertEqual(url, "https://v3.fal.media/a.mp4"); self.assertTrue(who.startswith("fal:"))
+        self.assertEqual(seen["hdr"]["Authorization"], "Key fk")
+        self.assertTrue(seen["url"].startswith("https://queue.fal.run/fal-ai/"))
+        self.assertEqual(seen["body"]["aspect_ratio"], "9:16")
+
+    def test_replicate_fluxo_e_download_com_token(self):
+        os.environ["REPLICATE_API_TOKEN"] = "rt"
+        post = lambda url, **kw: Resp(201, {"id": "p1", "status": "starting", "urls": {"get": "https://api.replicate.com/v1/predictions/p1"}})
+        get = lambda url, **kw: Resp(200, {"status": "succeeded", "urls": {"get": url},
+                                           "output": ["https://api.replicate.com/v1/files/abc/video.mp4"]})
+        with mock.patch("requests.post", post), mock.patch("requests.get", get):
+            url, who, dl = video.VideoMaestro(poll_every=0).generate("a cat")
+        self.assertIn("/v1/files/", url); self.assertEqual(dl["Authorization"], "Bearer rt")
+
+    def test_fal_sem_credito_cai_para_replicate(self):
+        os.environ.update(FAL_KEY="fk", REPLICATE_API_TOKEN="rt")
+        def post(url, **kw):
+            if "queue.fal.run" in url: return Resp(403)
+            return Resp(201, {"id": "p", "status": "succeeded", "output": "https://replicate.delivery/v.mp4",
+                              "urls": {"get": "x"}})
+        with mock.patch("requests.post", post):
+            url, who, dl = video.VideoMaestro(poll_every=0).generate("a cat")
+        self.assertEqual(url, "https://replicate.delivery/v.mp4"); self.assertTrue(who.startswith("replicate:"))
+
+
+class TestNovos(Base):
+    def test_magichour_fluxo_e_retry_sem_aspect(self):
+        os.environ["MAGIC_HOUR_API_KEY"] = "mhk_live_x"
+        bodies = []
+        def post(url, **kw):
+            bodies.append(dict(kw["json"]))
+            return Resp(422) if "aspect_ratio" in kw["json"] else Resp(200, {"id": "v1", "credits_charged": 5})
+        get = lambda url, **kw: Resp(200, {"status": "complete", "downloads": [{"url": "https://cdn.mh/v.mp4"}]})
+        with mock.patch("requests.post", post), mock.patch("requests.get", get):
+            url, who, dl = video.VideoMaestro(poll_every=0).generate("a dog running")
+        self.assertEqual(url, "https://cdn.mh/v.mp4"); self.assertEqual(who, "magichour:default")
+        self.assertEqual(bodies[0]["style"], {"prompt": "a dog running"}); self.assertNotIn("aspect_ratio", bodies[1])
+
+    def test_magichour_sem_credito_vai_para_proximo(self):
+        os.environ.update(MAGIC_HOUR_API_KEY="k", FAL_KEY="f")
+        def post(url, **kw):
+            if "magichour" in url: return Resp(402)
+            return Resp(200, {"status_url": "https://queue.fal.run/s", "response_url": "https://queue.fal.run/r"})
+        def get(url, **kw):
+            return Resp(200, {"status": "COMPLETED"}) if url.endswith("/s") else Resp(200, {"video": {"url": "https://f/v.mp4"}})
+        with mock.patch("requests.post", post), mock.patch("requests.get", get):
+            url, who, dl = video.VideoMaestro(poll_every=0).generate("x")
+        self.assertEqual(url, "https://f/v.mp4")
+
+    def test_mpt_fluxo(self):
+        os.environ["MPT_URL"] = "http://mpt:8080"
+        post = lambda url, **kw: Resp(200, {"status": 200, "data": {"task_id": "t1"}})
+        get = lambda url, **kw: Resp(200, {"data": {"state": 1, "progress": 100, "videos": ["http://mpt:8080/tasks/t1/final-1.mp4"]}})
+        with mock.patch("requests.post", post), mock.patch("requests.get", get):
+            url, who, dl = video.VideoMaestro(poll_every=0).generate("tema")
+        self.assertTrue(url.endswith("final-1.mp4"))
+
+    def test_cache_evita_segunda_chamada_de_ia(self):
+        os.environ.update(GROQ_API_KEY="a", VIDEO_PROVIDERS="http://a/v1")
+        main.LLM_CACHE.clear(); main.VIDEO_CACHE.clear()
+        calls = {"llm": 0, "vid": 0}
+        def post(url, **kw):
+            if "/chat/completions" in url:
+                calls["llm"] += 1; return ok('{"legenda":"L","prompt_video":"cat"}')
+            calls["vid"] += 1; return Resp(200, {"id": "j"})
+        with mock.patch("requests.post", post), \
+             mock.patch("requests.get", lambda *a, **k: Resp(200, {"status": "completed"})), \
+             mock.patch.object(main, "llm", maestro.Maestro()), \
+             mock.patch.object(main, "videos", video.VideoMaestro(poll_every=0)):
+            run_job("gato cache"); j = run_job("gato cache")
+        self.assertEqual(calls, {"llm": 1, "vid": 1}); self.assertIn("(cache)", j["api_llm"])
+
+    def test_rate_limit_por_ip(self):
+        class Rq:
+            headers = {"x-forwarded-for": "9.9.9.9"}
+            client = None
+        main.RATE.clear()
+        with mock.patch.object(main, "RATE_LIMIT", 2):
+            r = [main._limite(Rq()) for _ in range(3)]
+        self.assertEqual(r, [True, True, False])
 
 
 def run_job(ideia):

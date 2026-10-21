@@ -5,11 +5,13 @@ em "cooldown" e o próximo assume, sem o usuário perceber. Cada chave de cada
 provedor é um "slot" independente: várias chaves = mais crédito grátis.
 
 Variáveis de ambiente (todas opcionais; só os provedores com chave entram):
-  GROQ_API_KEY / GROQ_API_KEYS (separadas por vírgula)      GROQ_MODEL
+  GROQ_API_KEY / GROQ_API_KEYS (separadas por vírgula)      GROQ_MODEL(S)
   GEMINI_API_KEY / GEMINI_KEY / GEMINI_API_KEYS             GEMINI_MODEL
   OPENROUTER_API_KEY / OPENROUTER_API_KEYS                  OPENROUTER_MODEL
   CEREBRAS_API_KEY / CEREBRAS_API_KEYS                      CEREBRAS_MODEL
   MISTRAL_API_KEY / MISTRAL_API_KEYS                        MISTRAL_MODEL
+  <PROVEDOR>_MODELS=modelo1,modelo2  (cada modelo vira um slot próprio; no
+  OpenRouter uma única chave dá acesso a vários modelos, inclusive os ":free")
   LLM_ORDER=groq,gemini,openrouter,...   (ordem de preferência)
 Todos falam o protocolo OpenAI /chat/completions.
 """
@@ -25,7 +27,8 @@ PROVIDERS = {
     "gemini": ("https://generativelanguage.googleapis.com/v1beta/openai",
                "gemini-2.5-flash"),
     "openrouter": ("https://openrouter.ai/api/v1",
-                   "meta-llama/llama-3.3-70b-instruct:free"),
+                   "meta-llama/llama-3.3-70b-instruct:free,"
+                   "google/gemma-3-27b-it:free"),
     "cerebras": ("https://api.cerebras.ai/v1", "llama-3.3-70b"),
     "mistral": ("https://api.mistral.ai/v1", "mistral-small-latest"),
 }
@@ -63,10 +66,13 @@ class Maestro:
         out = []
         for name in order:
             base, default_model = PROVIDERS[name]
-            model = os.environ.get(f"{name.upper()}_MODEL", default_model)
+            raw = (os.environ.get(f"{name.upper()}_MODELS")
+                   or os.environ.get(f"{name.upper()}_MODEL") or default_model)
+            models = [m.strip() for m in raw.split(",") if m.strip()]
             for i, key in enumerate(_keys_for(name)):
-                out.append({"id": f"{name}#{i + 1}", "name": name,
-                            "base": base, "model": model, "key": key})
+                for model in models:      # 1 chave + N modelos = N slots
+                    out.append({"id": f"{name}#{i + 1}:{model}", "name": name,
+                                "base": base, "model": model, "key": key})
         return out
 
     def _cooling(self, slot_id):

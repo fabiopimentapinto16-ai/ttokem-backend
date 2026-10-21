@@ -4,14 +4,17 @@ Fluxo: ideia -> Ttokem (comprime só se compensar) -> maestro de IAs (roteiro,
 legenda, hashtags, prompt de vídeo) -> maestro de vídeo -> resultado.
 O usuário sempre dá o último clique para postar (o backend nunca posta).
 """
+import hashlib
 import json
+import os
 import re
 import threading
 import time
 import uuid
+from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -28,6 +31,12 @@ videos = VideoMaestro()
 pool = ThreadPoolExecutor(max_workers=4)
 JOBS, JOBS_LOCK = {}, threading.Lock()
 JOB_TTL = 3600
+LLM_CACHE, LLM_CACHE_TTL = {}, 6 * 3600      # mesma ideia = mesmo roteiro, sem gastar crédito
+VIDEO_CACHE, VIDEO_CACHE_TTL = {}, 3600      # links de vídeo expiram em ~1h
+RATE, RATE_LOCK = defaultdict(deque), threading.Lock()
+RATE_LIMIT = int(os.environ.get("RATE_LIMIT_PER_HOUR", "20"))   # pedidos por IP/hora
+PUBLIC_URL = os.environ.get("PUBLIC_URL",
+                            "https://ttoken-backend-8ba2a.containers.snapdeploy.app").rstrip("/")
 
 SYSTEM = (
     "Você cria conteúdo para vídeos curtos de redes sociais. Responda SOMENTE "
@@ -41,6 +50,7 @@ SYSTEM = (
 class GerarReq(BaseModel):
     ideia: str = Field(min_length=3, max_length=4000)
     plataforma: str = "instagram"
+    regenerar: bool = False        # True ignora o cache e gera de novo
 
 
 class ComprimirReq(BaseModel):
@@ -73,21 +83,27 @@ def _run(job_id, req: GerarReq):
     try:
         # 1) Ttokem: só comprime se realmente economiza (ideias curtas passam direto)
         comp = ttokem.compress(req.ideia, "auto")
-        _set(job_id, etapa="IA escrevendo roteiro e legenda",
+        _set(job_id, etapa="IA escrevendo roteiro e legenda", passo=1,
              tokens={"antes": comp["original_tokens"],
                      "depois": comp["compressed_tokens"],
                      "economia_pct": comp["saving_pct"], "modo": comp["mode"]})
 
         # 2) Maestro de IAs (troca sozinho se um crédito acabar)
-        try:
-            raw, api_llm = llm.chat([
-                {"role": "system", "content": SYSTEM},
-                {"role": "user",
-                 "content": f"Plataforma: {req.plataforma}\nIdeia: {comp['text']}"}])
-        except AllProvidersFailed as e:
-            _set(job_id, status="erro", erro=f"Nenhuma IA disponível: {e}")
-            return
-        data = _parse_json(raw) or {"legenda": raw, "prompt_video": req.ideia}
+        ckey = hashlib.sha1(f"{req.plataforma}|{comp['text'].lower()}".encode()).hexdigest()
+        hit = LLM_CACHE.get(ckey)
+        if hit and not req.regenerar and hit[0] > time.time():
+            data, api_llm = hit[1], hit[2] + " (cache)"
+        else:
+            try:
+                raw, api_llm = llm.chat([
+                    {"role": "system", "content": SYSTEM},
+                    {"role": "user",
+                     "content": f"Plataforma: {req.plataforma}\nIdeia: {comp['text']}"}])
+            except AllProvidersFailed as e:
+                _set(job_id, status="erro", erro=f"Nenhuma IA disponível: {e}")
+                return
+            data = _parse_json(raw) or {"legenda": raw, "prompt_video": req.ideia}
+            LLM_CACHE[ckey] = (time.time() + LLM_CACHE_TTL, data, api_llm)
         tags = data.get("hashtags") or []
         if isinstance(tags, str):
             tags = tags.split()
@@ -95,20 +111,35 @@ def _run(job_id, req: GerarReq):
         texto = (legenda + ("\n\n" + " ".join(tags) if tags else "")).strip()
         _set(job_id, api_llm=api_llm, titulo=data.get("titulo", ""),
              roteiro=data.get("roteiro", ""), texto=texto,
-             etapa="Gerando vídeo")
+             etapa="Gerando vídeo", passo=2)
 
         # 3) Maestro de vídeo (prompt em linguagem natural, NUNCA o codebook)
         prompt_video = str(data.get("prompt_video") or req.ideia)[:500]
+        vhit = VIDEO_CACHE.get(prompt_video)
         try:
-            url, api_video = videos.generate(prompt_video)
+            if vhit and not req.regenerar and vhit[0] > time.time():
+                url, api_video, dl_headers = vhit[1], vhit[2] + " (cache)", None
+            else:
+                url, api_video, dl_headers = videos.generate(prompt_video)
+                if not dl_headers:
+                    VIDEO_CACHE[prompt_video] = (time.time() + VIDEO_CACHE_TTL, url, api_video)
+            if dl_headers:      # o arquivo exige token: o backend repassa o download
+                _set(job_id, _src=url, _dl=dl_headers)
+                url = f"{PUBLIC_URL}/api/video/{job_id}"
             _set(job_id, status="pronto", video_url=url, api_video=api_video,
-                 etapa="Pronto")
+                 etapa="Pronto", passo=3)
         except VideoFailed as e:
             # a legenda continua válida mesmo sem vídeo
             _set(job_id, status="pronto", video_url="", api_video="nenhum",
-                 aviso=f"Vídeo indisponível agora: {e}", etapa="Pronto (sem vídeo)")
+                 aviso=f"Vídeo indisponível agora: {e}", etapa="Pronto (sem vídeo)",
+                 passo=3)
     except Exception as e:      # nunca deixar o job preso em "processando"
         _set(job_id, status="erro", erro=f"Falha inesperada: {e}")
+
+
+@app.get("/")
+def raiz():
+    return {"ok": True, "app": "Ttoken Studio"}
 
 
 @app.get("/health")
@@ -123,13 +154,31 @@ def comprimir(req: ComprimirReq):
     return ttokem.compress(req.texto, req.modo)
 
 
+def _limite(request) -> bool:
+    """True se o IP ainda pode gerar. Protege seus créditos grátis contra abuso."""
+    ip = (request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+          or getattr(getattr(request, "client", None), "host", "?"))
+    now = time.time()
+    with RATE_LOCK:
+        q = RATE[ip]
+        while q and q[0] < now - 3600:
+            q.popleft()
+        if len(q) >= RATE_LIMIT:
+            return False
+        q.append(now)
+        return True
+
+
 @app.post("/api/gerar")
-def gerar(req: GerarReq):
+def gerar(req: GerarReq, request: Request):
+    if not _limite(request):
+        raise HTTPException(429, "Limite de pedidos por hora atingido. Tente mais tarde.")
     _cleanup()
     job_id = uuid.uuid4().hex[:12]
     with JOBS_LOCK:
         JOBS[job_id] = {"status": "processando", "etapa": "Iniciando",
-                        "criado": time.time(), "atualizado": time.time()}
+                        "passo": 0, "criado": time.time(),
+                        "atualizado": time.time()}
     pool.submit(_run, job_id, req)
     return {"success": True, "job_id": job_id}
 
@@ -140,6 +189,23 @@ def status(job_id: str):
         job = JOBS.get(job_id)
         if not job:
             raise HTTPException(404, "job não encontrado (expirou?)")
-        out = dict(job)
+        out = {k: v for k, v in job.items() if not k.startswith("_")}
     out["success"] = out["status"] != "erro"
     return out
+
+
+@app.get("/api/video/{job_id}")
+def baixar_video(job_id: str):
+    """Repassa o vídeo quando o gerador exige token no download."""
+    import requests
+    from fastapi.responses import StreamingResponse
+    with JOBS_LOCK:
+        job = JOBS.get(job_id)
+        src, hdr = (job or {}).get("_src"), (job or {}).get("_dl")
+    if not src:
+        raise HTTPException(404, "vídeo não encontrado")
+    up = requests.get(src, headers=hdr, stream=True, timeout=60)
+    if up.status_code != 200:
+        raise HTTPException(502, f"origem respondeu {up.status_code}")
+    return StreamingResponse(up.iter_content(65536),
+                             media_type=up.headers.get("content-type", "video/mp4"))
