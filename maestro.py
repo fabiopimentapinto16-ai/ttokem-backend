@@ -7,6 +7,7 @@ provedor é um "slot" independente: várias chaves = mais crédito grátis.
 Variáveis de ambiente (todas opcionais; só os provedores com chave entram):
   GROQ_API_KEY / GROQ_API_KEYS (separadas por vírgula)      GROQ_MODEL(S)
   GEMINI_API_KEY / GEMINI_KEY / GEMINI_API_KEYS             GEMINI_MODEL
+  HF_TOKEN (Hugging Face)                                   HUGGINGFACE_MODEL
   OPENROUTER_API_KEY / OPENROUTER_API_KEYS                  OPENROUTER_MODEL
   CEREBRAS_API_KEY / CEREBRAS_API_KEYS                      CEREBRAS_MODEL
   MISTRAL_API_KEY / MISTRAL_API_KEYS                        MISTRAL_MODEL
@@ -31,8 +32,11 @@ PROVIDERS = {
                    "google/gemma-3-27b-it:free"),
     "cerebras": ("https://api.cerebras.ai/v1", "llama-3.3-70b"),
     "mistral": ("https://api.mistral.ai/v1", "mistral-small-latest"),
+    # Hugging Face Inference Providers (HF_TOKEN): créditos mensais pequenos, fica por último
+    "huggingface": ("https://router.huggingface.co/v1", "meta-llama/Llama-3.3-70B-Instruct"),
 }
-LEGACY_KEYS = {"gemini": ["GEMINI_KEY"]}
+LEGACY_KEYS = {"gemini": ["GOOGLE_API_KEY"],
+               "huggingface": ["HF_TOKEN", "HF_API_KEY", "HUGGINGFACE_TOKEN"]}
 
 
 class AllProvidersFailed(Exception):
@@ -42,7 +46,8 @@ class AllProvidersFailed(Exception):
 def _keys_for(name: str):
     up = name.upper()
     raw = []
-    for var in [f"{up}_API_KEYS", f"{up}_API_KEY", *LEGACY_KEYS.get(name, [])]:
+    for var in [f"{up}_API_KEYS", f"{up}_API_KEY", f"{up}_KEY", f"{up}_TOKEN",
+                f"{up}_API_TOKEN", *LEGACY_KEYS.get(name, [])]:
         raw += [k.strip() for k in os.environ.get(var, "").split(",")]
     seen, keys = set(), []
     for k in raw:

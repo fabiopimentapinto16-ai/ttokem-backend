@@ -16,6 +16,7 @@ ele esfria e o próximo assume sozinho.
 | `GEMINI_API_KEY` (ou o antigo `GEMINI_KEY`) | https://aistudio.google.com/apikey |
 | `MISTRAL_API_KEY` | https://console.mistral.ai/api-keys |
 | `CEREBRAS_API_KEY` | https://cloud.cerebras.ai |
+| `HF_TOKEN` (Hugging Face) | https://huggingface.co/settings/tokens |
 
 Extras: `<PROVEDOR>_API_KEYS=k1,k2` (várias chaves), `<PROVEDOR>_MODELS=m1,m2` (vários
 modelos), `LLM_ORDER=groq,gemini,openrouter` (ordem).
@@ -27,10 +28,13 @@ OpenRouter grátis: 20 req/min e 50 req/dia (1000/dia com ≥ 10 créditos compr
 | `MAGIC_HOUR_API_KEY` | créditos grátis no cadastro — https://magichour.ai/developer |
 | `FAL_KEY` | 1 chave, vários modelos; pago por uso — https://fal.ai/dashboard/keys |
 | `REPLICATE_API_TOKEN` | pago por uso — https://replicate.com/account/api-tokens |
+| `COLAB_SECRET` + notebook `colab/ttoken_colab_video.ipynb` | **GPU T4 grátis do Google Colab** (CogVideoX-2b): vídeos sem custo por vídeo e sem cota de API. O notebook se registra sozinho em `/api/colab/registrar`. Ver seção Colab |
+| `BIGMODEL_API_KEY` | Zhipu CogVideoX-Flash (grátis, pode ter fila) |
+| `TAVUS_API_KEY` | avatar falando o roteiro (não é vídeo de cena; usado por último) |
 | `VIDEO_PROVIDERS` / `PROXY_URL` | seu proxy estilo OpenAI (`/videos`) |
 | `MPT_URL` | MoneyPrinterTurbo próprio (precisa de servidor; adaptador ainda sem teste real) |
 
-Extras: `VIDEO_ORDER=mpt,proxy,magichour,fal,replicate`, `FAL_VIDEO_MODEL`,
+Extras: `VIDEO_ORDER=colab,mpt,proxy,magichour,fal,replicate,bigmodel,tavus` (padrão), `FAL_VIDEO_MODEL`,
 `REPLICATE_VIDEO_MODEL`, `MAGIC_HOUR_MODEL`, `MAGIC_HOUR_SECONDS`, `*_EXTRA_INPUT` (JSON).
 
 ### Proteção
@@ -39,7 +43,17 @@ Extras: `VIDEO_ORDER=mpt,proxy,magichour,fal,replicate`, `FAL_VIDEO_MODEL`,
   Envie `"regenerar": true` para ignorar o cache.
 - `PUBLIC_URL` — URL pública do backend (usada quando o download do vídeo precisa de token).
 
+## Colab (vídeos extras grátis)
+1. SnapDeploy → variável `COLAB_SECRET` = uma senha longa.
+2. Colab → abra `colab/ttoken_colab_video.ipynb`, GPU T4, cole a mesma senha na célula 2, rode as células 1→3.
+3. Confira em `/health`: `ativos.video` passa a listar `colab`. Se o Colab dormir, o backend
+   percebe em ≤15 min e usa os outros geradores sozinho.
+Limites: o Colab grátis desliga por inatividade/tempo; ~minutos por vídeo; saída recortada para 9:16.
+Este caminho **ainda não foi testado numa GPU real** (o servidor e o adaptador foram testados com gerador falso).
+
 ## Endpoints
+- `POST /api/chat` `{"mensagem": "...", "historico": []}` → `resposta` (aba CHAT/CÓDIGO do app)
+- `POST /api/colab/registrar` `{"url","secret"}` → usado pelo notebook
 - `POST /api/gerar` `{"ideia": "...", "plataforma": "instagram reels", "regenerar": false}` → `{"job_id"}`
 - `GET /api/status/{job_id}` → `status` (`processando`|`pronto`|`erro`), `passo` (0–3), `texto`,
   `video_url`, `api_llm`, `api_video`, `tokens`

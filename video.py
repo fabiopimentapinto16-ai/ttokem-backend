@@ -15,6 +15,12 @@ os gratuitos/self-hosted primeiro; mude com VIDEO_ORDER):
   mpt       MoneyPrinterTurbo self-hosted (precisa de servidor próprio)
             MPT_URL, MPT_BASIC_AUTH ("usuario:senha", opcional)
             (adaptador escrito pela API publicada; ainda sem servidor real testado)
+  tavus     Tavus — avatar falando o roteiro (não é vídeo de cena; fica por último)
+            TAVUS_API_KEY, TAVUS_REPLICA_ID (opcional)
+  bigmodel  Zhipu BigModel (CogVideoX-Flash) — BIGMODEL_API_KEY
+  colab     SEU Google Colab (GPU T4 grátis) rodando um modelo aberto de vídeo:
+            sem custo por vídeo, sem cota de API. O notebook em colab/ se registra
+            sozinho no backend (COLAB_SECRET) — ou fixe COLAB_URL.
 generate() devolve (url, gerador, headers_de_download | None).
 """
 import json
@@ -37,6 +43,41 @@ FAL_DEFAULT_MODEL = "fal-ai/bytedance/seedance/v1.5/pro/text-to-video"
 REPLICATE_DEFAULT_MODEL = "minimax/video-01"
 
 
+def _env(*names):
+    """Primeira variável de ambiente preenchida (aceita variações de nome)."""
+    for n in names:
+        v = os.environ.get(n, "").strip()
+        if v:
+            return v
+    return ""
+
+
+def _env_fuzzy(*parts):
+    """Aceita nomes cortados/errados no painel (ex.: MAGIC_HOUR_ sem o resto):
+    pega a primeira variável cujo nome contém TODOS os trechos e tem valor."""
+    for k, v in sorted(os.environ.items()):
+        ku = k.upper()
+        if v.strip() and all(x in ku for x in parts):
+            return v.strip()
+    return ""
+
+
+# Google Colab se registra aqui (o link do túnel muda a cada sessão)
+COLAB = {"url": "", "ts": 0.0}
+COLAB_TTL = 15 * 60            # sem sinal de vida por 15 min = offline
+
+
+def colab_registrar(url: str):
+    COLAB["url"], COLAB["ts"] = url.rstrip("/"), time.time()
+
+
+def _colab_url():
+    fixa = os.environ.get("COLAB_URL", "").strip().rstrip("/")
+    if COLAB["url"] and time.time() - COLAB["ts"] < COLAB_TTL:
+        return COLAB["url"]
+    return fixa
+
+
 def _extra(var, default=None):
     try:
         return json.loads(os.environ.get(var, "")) if os.environ.get(var) else (default or {})
@@ -45,7 +86,21 @@ def _extra(var, default=None):
 
 
 def _providers():
-    out = {"mpt": [], "proxy": [], "magichour": [], "fal": [], "replicate": []}
+    out = {"colab": [], "mpt": [], "proxy": [], "magichour": [], "fal": [],
+           "replicate": [], "bigmodel": [], "tavus": []}
+    cu = _colab_url()
+    if cu:
+        out["colab"].append({"id": "colab", "kind": "colab", "base": cu, "model": "colab",
+                             "key": os.environ.get("COLAB_SECRET", "")})
+    tv = _env("TAVUS_API_KEY", "TAVUS_API_KI", "TAVUS_KEY") or _env_fuzzy("TAVUS")
+    if tv:
+        rid = os.environ.get("TAVUS_REPLICA_ID", "rc9cff32ceba").strip() or "rc9cff32ceba"
+        out["tavus"].append({"id": f"tavus:{rid[:8]}", "kind": "tavus", "model": rid,
+                             "key": tv, "replica_id": rid})
+    bm = _env("BIGMODEL_API_KEY", "ZHIPU_API_KEY", "BIGMODEL_KEY") or _env_fuzzy("BIGMODEL")
+    if bm:
+        m = os.environ.get("BIGMODEL_VIDEO_MODEL", "cogvideox-flash")
+        out["bigmodel"].append({"id": f"bigmodel:{m}", "kind": "bigmodel", "model": m, "key": bm})
     default_model = os.environ.get("VIDEO_MODEL", "wan-fast")
     entries = [e.strip() for e in os.environ.get("VIDEO_PROVIDERS", "").split(",")
                if e.strip()]
@@ -64,19 +119,23 @@ def _providers():
         out["mpt"].append({"id": f"mpt:{base}", "kind": "mpt", "base": base,
                            "model": "moneyprinterturbo",
                            "key": os.environ.get("MPT_BASIC_AUTH", "")})
-    if os.environ.get("MAGIC_HOUR_API_KEY"):
+    mh = (_env("MAGIC_HOUR_API_KEY", "MAGIC_HOUR_KEY", "MAGICHOUR_API_KEY",
+               "MAGIC_HOUR_TOKEN", "MAGICHOUR_KEY") or _env_fuzzy("MAGIC", "HOUR")
+          or _env_fuzzy("MAGICHOUR"))
+    if mh:
         m = os.environ.get("MAGIC_HOUR_MODEL", "default")
         out["magichour"].append({"id": f"magichour:{m}", "kind": "magichour",
-                                 "model": m, "key": os.environ["MAGIC_HOUR_API_KEY"]})
-    if os.environ.get("FAL_KEY"):
+                                 "model": m, "key": mh})
+    fk = _env("FAL_KEY", "FAL_API_KEY")
+    if fk:
         m = os.environ.get("FAL_VIDEO_MODEL", FAL_DEFAULT_MODEL)
-        out["fal"].append({"id": f"fal:{m}", "kind": "fal", "model": m,
-                           "key": os.environ["FAL_KEY"]})
-    if os.environ.get("REPLICATE_API_TOKEN"):
+        out["fal"].append({"id": f"fal:{m}", "kind": "fal", "model": m, "key": fk})
+    rk = _env("REPLICATE_API_TOKEN", "REPLICATE_API_KEY", "REPLICATE_TOKEN")
+    if rk:
         m = os.environ.get("REPLICATE_VIDEO_MODEL", REPLICATE_DEFAULT_MODEL)
         out["replicate"].append({"id": f"replicate:{m}", "kind": "replicate",
-                                 "model": m, "key": os.environ["REPLICATE_API_TOKEN"]})
-    order = [n.strip() for n in os.environ.get("VIDEO_ORDER", "mpt,proxy,magichour,fal,replicate").split(",")]
+                                 "model": m, "key": rk})
+    order = [n.strip() for n in os.environ.get("VIDEO_ORDER", "colab,mpt,proxy,magichour,fal,replicate,bigmodel,tavus").split(",")]
     order += [n for n in out if n not in order]
     return [p for n in order for p in out.get(n, [])]
 
@@ -97,9 +156,9 @@ class VideoMaestro:
             self._cool[pid] = time.time() + seconds
 
     # ----------------------------------------------------- adaptadores
-    def _wait(self, check):
+    def _wait(self, check, max_wait=None):
         """check() -> (done, resultado). Consulta até acabar o prazo."""
-        deadline = time.time() + self.max_wait
+        deadline = time.time() + (max_wait or self.max_wait)
         while time.time() < deadline:
             done, res = check()
             if done:
@@ -112,6 +171,90 @@ class VideoMaestro:
         if r.status_code in (401, 402, 403, 429):
             raise NoCredit(f"HTTP {r.status_code}")
         r.raise_for_status()
+
+    def _colab(self, p, prompt):
+        """Seu Colab (GPU grátis). O notebook expõe /generate, /status/{id}, /video/{id}."""
+        hdr = {"X-Token": p["key"]} if p["key"] else {}
+        try:
+            r = requests.post(f"{p['base']}/generate", headers=hdr, timeout=30,
+                              json={"prompt": prompt[:500]})
+        except requests.RequestException:
+            COLAB["ts"] = 0.0            # túnel caiu: some da lista até se registrar de novo
+            raise
+        if r.status_code in (401, 403):
+            raise NoCredit("COLAB_SECRET não confere com o do notebook")
+        r.raise_for_status()
+        job = r.json()["job_id"]
+
+        def check():
+            st = requests.get(f"{p['base']}/status/{job}", headers=hdr, timeout=20).json()
+            if st.get("status") == "error":
+                raise VideoFailed(str(st.get("error") or "erro no Colab")[:200])
+            return st.get("status") == "done", None
+        self._wait(check, max_wait=420)
+        return f"{p['base']}/video/{job}", (hdr or {"X-Token": ""})
+
+    def _tavus(self, p, prompt):
+        """Avatar falando o roteiro (não é vídeo de cena genérico)."""
+        hdr = {"x-api-key": p["key"], "Content-Type": "application/json"}
+        body = {"replica_id": p.get("replica_id") or p["model"],
+                "script": (prompt or "Hello from Ttoken Studio.")[:1500],
+                "video_name": "ttoken-" + str(int(time.time()))}
+        body.update(_extra("TAVUS_EXTRA_INPUT"))
+        r = requests.post("https://tavusapi.com/v2/videos", headers=hdr, json=body, timeout=30)
+        self._guard(r)
+        data = r.json()
+        vid = data.get("video_id")
+        if not vid:
+            raise VideoFailed("Tavus sem video_id")
+        box = {}
+
+        def check():
+            st = requests.get(f"https://tavusapi.com/v2/videos/{vid}", headers=hdr,
+                              timeout=20).json()
+            status = (st.get("status") or "").lower()
+            if status == "ready":
+                box["url"] = st.get("download_url") or st.get("stream_url") or st.get("hosted_url")
+                return True, None
+            if status in ("error", "deleted"):
+                raise VideoFailed(str(st.get("status_details") or status)[:200])
+            return False, None
+        self._wait(check)
+        url = box.get("url") or data.get("hosted_url")
+        if not url:
+            raise VideoFailed("Tavus sem URL de vídeo")
+        return url, None
+
+    def _bigmodel(self, p, prompt):
+        hdr = {"Authorization": f"Bearer {p['key']}", "Content-Type": "application/json"}
+        body = {"model": p["model"], "prompt": (prompt or "")[:500]}
+        body.update(_extra("BIGMODEL_EXTRA_INPUT"))
+        r = requests.post("https://open.bigmodel.cn/api/paas/v4/videos/generations",
+                          headers=hdr, json=body, timeout=30)
+        self._guard(r)
+        task_id = r.json().get("id")
+        if not task_id:
+            raise VideoFailed("sem task id do BigModel")
+        box = {}
+
+        def check():
+            st = requests.get(f"https://open.bigmodel.cn/api/paas/v4/async-result/{task_id}",
+                              headers=hdr, timeout=20).json()
+            status = (st.get("task_status") or "").upper()
+            if status == "SUCCESS":
+                res = st.get("video_result") or []
+                if res and isinstance(res[0], dict):
+                    box["url"] = res[0].get("url")
+                elif res and isinstance(res[0], str):
+                    box["url"] = res[0]
+                return True, None
+            if status == "FAIL":
+                raise VideoFailed(str(st.get("error") or "FAIL")[:200])
+            return False, None
+        self._wait(check)
+        if not box.get("url"):
+            raise VideoFailed("BigModel sem URL de vídeo")
+        return box["url"], None
 
     def _proxy(self, p, prompt):
         hdr = {"Authorization": f"Bearer {p['key']}"} if p["key"] else {}

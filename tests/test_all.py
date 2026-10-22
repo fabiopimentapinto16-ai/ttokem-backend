@@ -47,6 +47,8 @@ class Base(unittest.TestCase):
                  if not (k.endswith(("_API_KEY", "_API_KEYS", "_KEY", "_TOKEN")) or
                          k in ("VIDEO_PROVIDERS", "PROXY_URL", "LLM_ORDER", "FAL_KEY", "MPT_URL",
                                    "REPLICATE_API_TOKEN", "VIDEO_ORDER", "MAGIC_HOUR_API_KEY"))}
+        for k in ("HF_TOKEN", "MAGIC_HOUR_KEY", "GOOGLE_API_KEY"):
+            clean.pop(k, None)
         p = mock.patch.dict(os.environ, clean, clear=True)
         p.start(); self.addCleanup(p.stop)
 
@@ -148,6 +150,28 @@ class TestVideo(Base):
         self.assertEqual(url, "https://replicate.delivery/v.mp4"); self.assertTrue(who.startswith("replicate:"))
 
 
+class TestSuaConfiguracao(Base):
+    """As variáveis que aparecem no SnapDeploy do usuário."""
+    def test_variaveis_do_snapdeploy_sao_reconhecidas(self):
+        os.environ.update(GEMINI_KEY="g", GROQ_API_KEY="q", HF_TOKEN="hf_x",
+                          OPENROUTER_API_KEY="o", MAGIC_HOUR_API_KEY="mhk_live_z")
+        nomes = {s["name"] for s in maestro.Maestro().slots()}
+        self.assertEqual(nomes, {"gemini", "groq", "huggingface", "openrouter"})
+        self.assertEqual([p["kind"] for p in video._providers()], ["magichour"])
+
+    def test_variacao_de_nome_magic_hour(self):
+        os.environ["MAGIC_HOUR_KEY"] = "k"
+        self.assertEqual([p["kind"] for p in video._providers()], ["magichour"])
+
+    def test_health_mostra_ativos_sem_vazar_chaves(self):
+        os.environ.update(GROQ_API_KEY="SEGREDO123", MAGIC_HOUR_API_KEY="SEGREDO456")
+        with mock.patch.object(main, "llm", maestro.Maestro()), \
+             mock.patch.object(main, "videos", video.VideoMaestro()):
+            h = main.health()
+        self.assertEqual(h["ativos"], {"texto": ["groq"], "video": ["magichour"]})
+        self.assertNotIn("SEGREDO", str(h))
+
+
 class TestNovos(Base):
     def test_magichour_fluxo_e_retry_sem_aspect(self):
         os.environ["MAGIC_HOUR_API_KEY"] = "mhk_live_x"
@@ -244,6 +268,51 @@ class TestPipeline(Base):
             j = run_job("gato")
         self.assertEqual(j["status"], "pronto"); self.assertEqual(j["video_url"], "")
         self.assertIn("indisponível", j["aviso"]); self.assertEqual(j["texto"], "L")
+
+
+class TestColab(Base):
+    def test_registro_exige_segredo(self):
+        os.environ.pop("COLAB_SECRET", None)
+        with self.assertRaises(main.HTTPException) as c:
+            main.colab_registrar(main.ColabReq(url="https://a.trycloudflare.com", secret="x"))
+        self.assertEqual(c.exception.status_code, 403)
+        os.environ["COLAB_SECRET"] = "s3"
+        with self.assertRaises(main.HTTPException):
+            main.colab_registrar(main.ColabReq(url="https://a.trycloudflare.com", secret="errado"))
+        main.colab_registrar(main.ColabReq(url="https://a.trycloudflare.com/", secret="s3"))
+        self.assertEqual(video._providers()[0]["id"], "colab")
+        video.COLAB["ts"] = 0          # sem sinal de vida: sai da fila
+        self.assertFalse([p for p in video._providers() if p["kind"] == "colab"])
+
+    def test_adaptador_colab_devolve_download_com_token(self):
+        os.environ["COLAB_URL"] = "http://colab.test"; os.environ["COLAB_SECRET"] = "s3"
+        post = lambda url, **kw: Resp(200, {"job_id": "abc123"})
+        get = lambda url, **kw: Resp(200, {"status": "done"})
+        with mock.patch("requests.post", post), mock.patch("requests.get", get):
+            url, who, dl = video.VideoMaestro(poll_every=0).generate("cachorro")
+        self.assertEqual((url, who, dl), ("http://colab.test/video/abc123", "colab", {"X-Token": "s3"}))
+
+    def test_colab_offline_cai_para_o_proximo(self):
+        os.environ["COLAB_URL"] = "http://colab.test"; os.environ["FAL_KEY"] = "k"
+        def post(url, **kw):
+            if "colab.test" in url: raise maestro.requests.ConnectionError("off")
+            return Resp(200, {"status_url": "https://queue.fal.run/s", "response_url": "https://queue.fal.run/r"})
+        get = lambda url, **kw: Resp(200, {"status": "COMPLETED"}) if url.endswith("/s") else Resp(200, {"video": {"url": "https://f/v.mp4"}})
+        with mock.patch("requests.post", post), mock.patch("requests.get", get):
+            url, who, dl = video.VideoMaestro(poll_every=0).generate("x")
+        self.assertTrue(who.startswith("fal"))
+
+    def test_nome_de_variavel_cortado_no_painel(self):
+        os.environ["MAGIC_HOUR_"] = "chave"
+        self.assertTrue([p for p in video._providers() if p["kind"] == "magichour"])
+
+    def test_chat_responde_e_limita(self):
+        os.environ["GROQ_API_KEY"] = "a"
+        with mock.patch.object(maestro.requests, "post", lambda *a, **k: ok("oi!")), \
+             mock.patch.object(main, "llm", maestro.Maestro()):
+            class Rq: headers = {}; client = types.SimpleNamespace(host="9.9.9.9")
+            r = main.chat(main.ChatReq(mensagem="ola"), Rq())
+        self.assertEqual(r["resposta"], "oi!")
 
 
 if __name__ == "__main__":

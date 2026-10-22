@@ -4,10 +4,8 @@ Fluxo: ideia -> Ttokem (comprime só se compensar) -> maestro de IAs (roteiro,
 legenda, hashtags, prompt de vídeo) -> maestro de vídeo -> resultado.
 O usuário sempre dá o último clique para postar (o backend nunca posta).
 """
-import hashlib
-import json
 import os
-import re
+import sys
 import threading
 import time
 import uuid
@@ -18,9 +16,12 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+import pipeline
 import ttokem
-from maestro import AllProvidersFailed, Maestro
-from video import VideoFailed, VideoMaestro
+import video as video_mod
+from maestro import Maestro
+from pipeline import LLM_CACHE, VIDEO_CACHE   # noqa: F401  (mesmos objetos)
+from video import VideoMaestro
 
 app = FastAPI(title="Ttoken Studio")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
@@ -31,21 +32,10 @@ videos = VideoMaestro()
 pool = ThreadPoolExecutor(max_workers=4)
 JOBS, JOBS_LOCK = {}, threading.Lock()
 JOB_TTL = 3600
-LLM_CACHE, LLM_CACHE_TTL = {}, 6 * 3600      # mesma ideia = mesmo roteiro, sem gastar crédito
-VIDEO_CACHE, VIDEO_CACHE_TTL = {}, 3600      # links de vídeo expiram em ~1h
 RATE, RATE_LOCK = defaultdict(deque), threading.Lock()
 RATE_LIMIT = int(os.environ.get("RATE_LIMIT_PER_HOUR", "20"))   # pedidos por IP/hora
 PUBLIC_URL = os.environ.get("PUBLIC_URL",
-                            "https://ttoken-backend-8ba2a.containers.snapdeploy.app").rstrip("/")
-
-SYSTEM = (
-    "Você cria conteúdo para vídeos curtos de redes sociais. Responda SOMENTE "
-    "com JSON válido, sem texto fora dele, com as chaves: "
-    '"titulo" (curto), "roteiro" (3-5 cenas curtas), "legenda" (pronta para '
-    'postar, em português do Brasil, com gancho e chamada para ação), '
-    '"hashtags" (lista de 5 a 8 strings com #), "prompt_video" (descrição '
-    "visual da cena em INGLÊS, até 350 caracteres, sem texto na tela).")
-
+                            "https://ttokem-backend-8ba2a.containers.snapdeploy.app").rstrip("/")
 
 class GerarReq(BaseModel):
     ideia: str = Field(min_length=3, max_length=4000)
@@ -56,15 +46,6 @@ class GerarReq(BaseModel):
 class ComprimirReq(BaseModel):
     texto: str
     modo: str = "auto"      # auto | light | v24
-
-
-def _parse_json(text: str):
-    t = re.sub(r"^```(?:json)?|```$", "", text.strip(), flags=re.MULTILINE).strip()
-    m = re.search(r"\{.*\}", t, re.DOTALL)
-    try:
-        return json.loads(m.group(0) if m else t)
-    except (ValueError, AttributeError):
-        return None
 
 
 def _set(job_id, **kw):
@@ -80,61 +61,14 @@ def _cleanup():
 
 
 def _run(job_id, req: GerarReq):
-    try:
-        # 1) Ttokem: só comprime se realmente economiza (ideias curtas passam direto)
-        comp = ttokem.compress(req.ideia, "auto")
-        _set(job_id, etapa="IA escrevendo roteiro e legenda", passo=1,
-             tokens={"antes": comp["original_tokens"],
-                     "depois": comp["compressed_tokens"],
-                     "economia_pct": comp["saving_pct"], "modo": comp["mode"]})
+    def report(**kw):
+        if kw.get("video_url"):
+            with JOBS_LOCK:
+                if "_dl" in JOBS[job_id]:   # arquivo exige token: o backend repassa o download
+                    kw["video_url"] = f"{PUBLIC_URL}/api/video/{job_id}"
+        _set(job_id, **kw)
 
-        # 2) Maestro de IAs (troca sozinho se um crédito acabar)
-        ckey = hashlib.sha1(f"{req.plataforma}|{comp['text'].lower()}".encode()).hexdigest()
-        hit = LLM_CACHE.get(ckey)
-        if hit and not req.regenerar and hit[0] > time.time():
-            data, api_llm = hit[1], hit[2] + " (cache)"
-        else:
-            try:
-                raw, api_llm = llm.chat([
-                    {"role": "system", "content": SYSTEM},
-                    {"role": "user",
-                     "content": f"Plataforma: {req.plataforma}\nIdeia: {comp['text']}"}])
-            except AllProvidersFailed as e:
-                _set(job_id, status="erro", erro=f"Nenhuma IA disponível: {e}")
-                return
-            data = _parse_json(raw) or {"legenda": raw, "prompt_video": req.ideia}
-            LLM_CACHE[ckey] = (time.time() + LLM_CACHE_TTL, data, api_llm)
-        tags = data.get("hashtags") or []
-        if isinstance(tags, str):
-            tags = tags.split()
-        legenda = str(data.get("legenda", "")).strip()
-        texto = (legenda + ("\n\n" + " ".join(tags) if tags else "")).strip()
-        _set(job_id, api_llm=api_llm, titulo=data.get("titulo", ""),
-             roteiro=data.get("roteiro", ""), texto=texto,
-             etapa="Gerando vídeo", passo=2)
-
-        # 3) Maestro de vídeo (prompt em linguagem natural, NUNCA o codebook)
-        prompt_video = str(data.get("prompt_video") or req.ideia)[:500]
-        vhit = VIDEO_CACHE.get(prompt_video)
-        try:
-            if vhit and not req.regenerar and vhit[0] > time.time():
-                url, api_video, dl_headers = vhit[1], vhit[2] + " (cache)", None
-            else:
-                url, api_video, dl_headers = videos.generate(prompt_video)
-                if not dl_headers:
-                    VIDEO_CACHE[prompt_video] = (time.time() + VIDEO_CACHE_TTL, url, api_video)
-            if dl_headers:      # o arquivo exige token: o backend repassa o download
-                _set(job_id, _src=url, _dl=dl_headers)
-                url = f"{PUBLIC_URL}/api/video/{job_id}"
-            _set(job_id, status="pronto", video_url=url, api_video=api_video,
-                 etapa="Pronto", passo=3)
-        except VideoFailed as e:
-            # a legenda continua válida mesmo sem vídeo
-            _set(job_id, status="pronto", video_url="", api_video="nenhum",
-                 aviso=f"Vídeo indisponível agora: {e}", etapa="Pronto (sem vídeo)",
-                 passo=3)
-    except Exception as e:      # nunca deixar o job preso em "processando"
-        _set(job_id, status="erro", erro=f"Falha inesperada: {e}")
+    pipeline.produzir(req.ideia, req.plataforma, llm, videos, report, req.regenerar)
 
 
 @app.get("/")
@@ -142,9 +76,60 @@ def raiz():
     return {"ok": True, "app": "Ttoken Studio"}
 
 
+VERSAO = "1.3.0"
+
+
+def _resumo():
+    return {"texto": sorted({x["slot"].split("#")[0] for x in llm.status()}),
+            "video": sorted({x["tipo"] for x in videos.status()})}
+
+
 @app.get("/health")
 def health():
-    return {"ok": True, "ias": llm.status(), "videos": videos.status()}
+    """Diagnóstico: mostra QUAIS provedores estão ativos (nunca as chaves)."""
+    return {"ok": True, "versao": VERSAO, "python": sys.version.split()[0],
+            "ativos": _resumo(), "ias": llm.status(), "videos": videos.status()}
+
+
+class ChatReq(BaseModel):
+    mensagem: str = Field(min_length=1, max_length=4000)
+    historico: list = []
+
+
+@app.post("/api/chat")
+def chat(req: ChatReq, request: Request):
+    """Conversa livre / pedido de código com o maestro de IAs."""
+    if not _limite(request):
+        raise HTTPException(429, "Limite de pedidos por hora atingido.")
+    msgs = [{"role": "system", "content":
+             "Você é o assistente do Ttoken Studio: roteiros, legendas, ideias de vídeo e "
+             "código (Python/Kivy). Responda em português, claro e prático."}]
+    for h in (req.historico or [])[-10:]:
+        if isinstance(h, dict) and h.get("role") in ("user", "assistant") and h.get("content"):
+            msgs.append({"role": h["role"], "content": str(h["content"])[:4000]})
+    msgs.append({"role": "user", "content": req.mensagem.strip()})
+    try:
+        texto, api = llm.chat(msgs, max_tokens=1500)
+    except Exception as e:
+        raise HTTPException(502, f"IA indisponível: {e}")
+    return {"ok": True, "resposta": texto, "ia": api}
+
+
+class ColabReq(BaseModel):
+    url: str
+    secret: str
+
+
+@app.post("/api/colab/registrar")
+def colab_registrar(req: ColabReq):
+    """O notebook do Colab avisa aqui o link do túnel (muda a cada sessão)."""
+    esperado = os.environ.get("COLAB_SECRET", "")
+    if not esperado or req.secret != esperado:
+        raise HTTPException(403, "COLAB_SECRET ausente ou incorreto")
+    if not req.url.startswith("https://"):
+        raise HTTPException(400, "url inválida")
+    video_mod.colab_registrar(req.url)
+    return {"ok": True}
 
 
 @app.post("/api/comprimir")
@@ -209,3 +194,11 @@ def baixar_video(job_id: str):
         raise HTTPException(502, f"origem respondeu {up.status_code}")
     return StreamingResponse(up.iter_content(65536),
                              media_type=up.headers.get("content-type", "video/mp4"))
+
+
+print("[ttoken] v%s | python %s | provedores ativos: %s" % (
+    VERSAO, sys.version.split()[0], _resumo()), flush=True)
+
+if __name__ == "__main__":      # python main.py  (alguns hosts iniciam assim)
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", "8000")))
