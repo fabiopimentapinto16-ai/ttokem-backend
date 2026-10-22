@@ -18,7 +18,7 @@ except ModuleNotFoundError:
     cors.CORSMiddleware = object
     sys.modules.update({"fastapi": fa, "fastapi.middleware": mw, "fastapi.middleware.cors": cors})
 
-import ttokem, maestro, video, main
+import ttokem, maestro, video, main, gitops, audio
 
 TXT = ("Relato do incidente INC-2026-4821 em 2026-10-15 às 14:32 UTC. Basicamente, "
        "o serviço PaymentService.charge falhou em payment.js:142 com TIMEOUT_ERROR e "
@@ -313,6 +313,69 @@ class TestColab(Base):
             class Rq: headers = {}; client = types.SimpleNamespace(host="9.9.9.9")
             r = main.chat(main.ChatReq(mensagem="ola"), Rq())
         self.assertEqual(r["resposta"], "oi!")
+
+
+class TestGitEAudio(Base):
+    def _rq(self, secret="seg", q=None):
+        return types.SimpleNamespace(headers={"x-build-secret": secret} if secret else {}, query_params=q or {},
+                                     client=types.SimpleNamespace(host="1.1.1.1"))
+
+    def test_build_desligado_sem_config(self):
+        with self.assertRaises(main.HTTPException) as c:
+            main.build_iniciar(self._rq())
+        self.assertEqual(c.exception.status_code, 503)
+
+    def test_build_senha_errada(self):
+        os.environ.update(GITHUB_TOKEN="t", BUILD_SECRET="seg")
+        with self.assertRaises(main.HTTPException) as c:
+            main.build_iniciar(self._rq("errada"))
+        self.assertEqual(c.exception.status_code, 403)
+        main._auth_build(self._rq("seg")); main._auth_build(self._rq("", {"s": "seg"}))
+
+    def test_caminhos_perigosos_bloqueados(self):
+        for bad in (".github/workflows/build.yml", "../x", "/etc/passwd", ".git/config", ""):
+            self.assertFalse(gitops.seguro(bad), bad)
+        self.assertTrue(gitops.seguro("main.py")); self.assertTrue(gitops.seguro("pasta/a.py"))
+
+    def test_enviar_arquivo_cria_branch_e_commita(self):
+        os.environ.update(GITHUB_TOKEN="t", BUILD_SECRET="seg")
+        calls = []
+        def request(method, url, **kw):
+            calls.append((method, url.split("/repos/")[1])); 
+            if "git/ref/heads/main" in url: return Resp(200, {"object": {"sha": "abc"}})
+            if "git/refs" in url: return Resp(201, {})
+            if method == "PUT": return Resp(200, {"commit": {"sha": "1234567890"}})
+            return Resp(200, {})
+        def get(url, **kw):
+            calls.append(("GET", url.split("/repos/")[1]))
+            return Resp(404, {}) if ("heads/ia-build" in url or "contents/" in url) else Resp(200, {})
+        with mock.patch("requests.request", request), mock.patch("requests.get", get):
+            r = main.build_arquivo(main.ArquivoReq(path="main.py", conteudo="print(1)"), self._rq())
+        self.assertEqual((r["commit"], r["branch"]), ("1234567", "ia-build"))
+        self.assertTrue(any(m == "POST" and u.endswith("git/refs") for m, u in calls))
+        with self.assertRaises(main.HTTPException):
+            main.build_arquivo(main.ArquivoReq(path=".github/x.yml", conteudo="a"), self._rq())
+
+    def test_status_e_apk(self):
+        import io, zipfile
+        os.environ.update(GITHUB_TOKEN="t", BUILD_SECRET="seg")
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z: z.writestr("bin/app.apk", b"APKDATA")
+        def request(method, url, **kw):
+            if url.endswith("/actions/runs/7"): return Resp(200, {"status": "completed", "conclusion": "success", "html_url": "https://gh/7"})
+            if url.endswith("/runs/7/artifacts"): return Resp(200, {"artifacts": [{"name": "ttoken-apk", "id": 9}]})
+            if url.endswith("/artifacts/9/zip"):
+                r = Resp(200); r.content = buf.getvalue(); return r
+        with mock.patch("requests.request", request):
+            self.assertEqual(main.build_status(7, self._rq())["conclusao"], "success")
+            nome, dados = gitops.baixar_apk(7)
+        self.assertEqual((nome, dados), ("app.apk", b"APKDATA"))
+
+    def test_transcricao(self):
+        with self.assertRaises(audio.SemTranscricao): audio.transcrever(b"x")
+        os.environ["GROQ_API_KEY"] = "g"
+        with mock.patch("requests.post", lambda *a, **k: Resp(200, {"text": " ola mundo "})):
+            self.assertEqual(audio.transcrever(b"x"), "ola mundo")
 
 
 if __name__ == "__main__":

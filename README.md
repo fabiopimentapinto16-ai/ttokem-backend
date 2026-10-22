@@ -43,6 +43,16 @@ Extras: `VIDEO_ORDER=colab,mpt,proxy,magichour,fal,replicate,bigmodel,tavus` (pa
   Envie `"regenerar": true` para ignorar o cache.
 - `PUBLIC_URL` — URL pública do backend (usada quando o download do vídeo precisa de token).
 
+## Compilar pelo Git (aba CÓDIGO do app)
+Variáveis no SnapDeploy:
+- `GITHUB_TOKEN` — token fine-grained criado em github.com/settings/personal-access-tokens, **só para o repo
+  `ttokem-studio-apk`**, permissões *Contents: Read and write* e *Actions: Read and write*.
+- `BUILD_SECRET` — uma senha sua; digite a mesma em *Chaves → SENHA DE BUILD* no app.
+- (opcional) `BUILD_REPO`, `BUILD_BRANCH` (padrão `ia-build`).
+O código vai para o branch `ia-build` (o `main` nunca é alterado), o Actions compila, e o app baixa o APK.
+Caminhos em `.github/` e fora do repo são bloqueados. Sem as duas variáveis, os endpoints respondem 503.
+Chat por voz usa Whisper no Groq (`GROQ_API_KEY`).
+
 ## Colab (vídeos extras grátis)
 1. SnapDeploy → variável `COLAB_SECRET` = uma senha longa.
 2. Colab → abra `colab/ttoken_colab_video.ipynb`, GPU T4, cole a mesma senha na célula 2, rode as células 1→3.
@@ -52,6 +62,8 @@ Limites: o Colab grátis desliga por inatividade/tempo; ~minutos por vídeo; sa�
 Este caminho **ainda não foi testado numa GPU real** (o servidor e o adaptador foram testados com gerador falso).
 
 ## Endpoints
+- `POST /api/transcrever` `{"b64","nome"}` → `texto` (Whisper/Groq)
+- `POST /api/build/arquivo`, `POST /api/build/iniciar`, `GET /api/build/status/{run}`, `GET /api/build/apk/{run}` — cabeçalho `X-Build-Secret`
 - `POST /api/chat` `{"mensagem": "...", "historico": []}` → `resposta` (aba CHAT/CÓDIGO do app)
 - `POST /api/colab/registrar` `{"url","secret"}` → usado pelo notebook
 - `POST /api/gerar` `{"ideia": "...", "plataforma": "instagram reels", "regenerar": false}` → `{"job_id"}`

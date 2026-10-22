@@ -4,6 +4,8 @@ Fluxo: ideia -> Ttokem (comprime só se compensar) -> maestro de IAs (roteiro,
 legenda, hashtags, prompt de vídeo) -> maestro de vídeo -> resultado.
 O usuário sempre dá o último clique para postar (o backend nunca posta).
 """
+import base64
+import hmac
 import os
 import sys
 import threading
@@ -16,6 +18,8 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+import audio
+import gitops
 import pipeline
 import ttokem
 import video as video_mod
@@ -76,7 +80,7 @@ def raiz():
     return {"ok": True, "app": "Ttoken Studio"}
 
 
-VERSAO = "1.3.0"
+VERSAO = "1.4.0"
 
 
 def _resumo():
@@ -130,6 +134,79 @@ def colab_registrar(req: ColabReq):
         raise HTTPException(400, "url inválida")
     video_mod.colab_registrar(req.url)
     return {"ok": True}
+
+
+# ------------------------------------------------ áudio -> texto
+class AudioReq(BaseModel):
+    b64: str = Field(max_length=40_000_000)
+    nome: str = "audio.m4a"
+
+
+@app.post("/api/transcrever")
+def transcrever(req: AudioReq, request: Request):
+    if not _limite(request):
+        raise HTTPException(429, "Limite de pedidos por hora atingido.")
+    try:
+        texto = audio.transcrever(base64.b64decode(req.b64), req.nome[:60])
+    except audio.SemTranscricao as e:
+        raise HTTPException(502, str(e))
+    except ValueError:
+        raise HTTPException(400, "áudio inválido")
+    return {"ok": True, "texto": texto}
+
+
+# ------------------------------------- compilar pelo Git (protegido por senha)
+def _auth_build(request):
+    c = gitops.cfg()
+    if not c["secret"] or not c["token"]:
+        raise HTTPException(503, "Compilar pelo Git não está configurado "
+                            "(faltam BUILD_SECRET e GITHUB_TOKEN no servidor).")
+    q = getattr(request, "query_params", None) or {}
+    dado = request.headers.get("x-build-secret", "") or q.get("s", "")
+    if not hmac.compare_digest(dado.encode(), c["secret"].encode()):
+        raise HTTPException(403, "senha de build incorreta")
+    return c
+
+
+class ArquivoReq(BaseModel):
+    path: str = Field(min_length=1, max_length=120)
+    conteudo: str = Field(max_length=400_000)
+    mensagem: str = "Código gerado no Ttoken Studio"
+
+
+def _git(fn, *a, **k):
+    try:
+        return fn(*a, **k)
+    except gitops.GitError as e:
+        raise HTTPException(502, str(e))
+
+
+@app.post("/api/build/arquivo")
+def build_arquivo(req: ArquivoReq, request: Request):
+    c = _auth_build(request)
+    sha = _git(gitops.enviar_arquivo, req.path, req.conteudo, req.mensagem, c)
+    return {"ok": True, "commit": sha, "branch": c["branch"]}
+
+
+@app.post("/api/build/iniciar")
+def build_iniciar(request: Request):
+    c = _auth_build(request)
+    return {"ok": True, "run_id": _git(gitops.iniciar_build, c), "branch": c["branch"]}
+
+
+@app.get("/api/build/status/{run_id}")
+def build_status(run_id: int, request: Request):
+    c = _auth_build(request)
+    return _git(gitops.status, run_id, c)
+
+
+@app.get("/api/build/apk/{run_id}")
+def build_apk(run_id: int, request: Request):
+    from fastapi.responses import Response
+    c = _auth_build(request)
+    nome, dados = _git(gitops.baixar_apk, run_id, c)
+    return Response(dados, media_type="application/vnd.android.package-archive",
+                    headers={"Content-Disposition": f'attachment; filename="{nome}"'})
 
 
 @app.post("/api/comprimir")
