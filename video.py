@@ -25,6 +25,7 @@ generate() devolve (url, gerador, headers_de_download | None).
 """
 import json
 import os
+import re
 import threading
 import time
 
@@ -86,8 +87,11 @@ def _extra(var, default=None):
 
 
 def _providers():
-    out = {"colab": [], "mpt": [], "proxy": [], "magichour": [], "fal": [],
+    out = {"pexels": [], "colab": [], "mpt": [], "proxy": [], "magichour": [], "fal": [],
            "replicate": [], "bigmodel": [], "tavus": []}
+    px = _env("PEXELS_API_KEY", "PEXELS_KEY") or _env_fuzzy("PEXELS")
+    if px:
+        out["pexels"].append({"id": "pexels", "kind": "pexels", "model": "stock", "key": px})
     cu = _colab_url()
     if cu:
         out["colab"].append({"id": "colab", "kind": "colab", "base": cu, "model": "colab",
@@ -135,13 +139,13 @@ def _providers():
         m = os.environ.get("REPLICATE_VIDEO_MODEL", REPLICATE_DEFAULT_MODEL)
         out["replicate"].append({"id": f"replicate:{m}", "kind": "replicate",
                                  "model": m, "key": rk})
-    order = [n.strip() for n in os.environ.get("VIDEO_ORDER", "colab,mpt,proxy,magichour,fal,replicate,bigmodel,tavus").split(",")]
+    order = [n.strip() for n in os.environ.get("VIDEO_ORDER", "colab,mpt,proxy,magichour,fal,replicate,bigmodel,pexels,tavus").split(",")]
     order += [n for n in out if n not in order]
     return [p for n in order for p in out.get(n, [])]
 
 
 # Estimativa (minutos) por gerador — valores aproximados, não garantidos
-ETA = {"colab": (4, 8), "magichour": (1, 3), "fal": (1, 3), "replicate": (2, 6),
+ETA = {"pexels": (0, 1), "colab": (4, 8), "magichour": (1, 3), "fal": (1, 3), "replicate": (2, 6),
        "bigmodel": (1, 4), "tavus": (2, 5), "mpt": (2, 7), "proxy": (1, 5)}
 
 
@@ -184,6 +188,29 @@ class VideoMaestro:
         if r.status_code in (401, 402, 403, 429):
             raise NoCredit(f"HTTP {r.status_code}")
         r.raise_for_status()
+
+    def _pexels(self, p, prompt):
+        """Banco de vídeos LIVRES (licença Pexels, uso comercial permitido). Não é vídeo
+        gerado por IA: entra como último recurso para você nunca ficar sem vídeo."""
+        termos = " ".join(re.findall(r"[A-Za-z]{3,}", prompt)[:8]) or "nature"
+        r = requests.get("https://api.pexels.com/videos/search", timeout=20,
+                         headers={"Authorization": p["key"]},
+                         params={"query": termos, "orientation": "portrait",
+                                 "size": "medium", "per_page": 8})
+        self._guard(r)
+        melhor = None
+        for v in r.json().get("videos", []):
+            for f in v.get("video_files", []):
+                if f.get("file_type") == "video/mp4" and f.get("link"):
+                    h = f.get("height") or 0
+                    pontos = (1 if h >= f.get("width", 0) else 0, 1 if 720 <= h <= 1920 else 0)
+                    if melhor is None or pontos > melhor[0]:
+                        melhor = (pontos, f["link"])
+            if melhor and melhor[0] == (1, 1):
+                break
+        if not melhor:
+            raise VideoFailed("Pexels sem vídeo para esse tema")
+        return melhor[1], None
 
     def _colab(self, p, prompt):
         """Seu Colab (GPU grátis). O notebook expõe /generate, /status/{id}, /video/{id}."""

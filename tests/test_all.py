@@ -18,7 +18,7 @@ except ModuleNotFoundError:
     cors.CORSMiddleware = object
     sys.modules.update({"fastapi": fa, "fastapi.middleware": mw, "fastapi.middleware.cors": cors})
 
-import ttokem, maestro, video, main, gitops, audio
+import ttokem, maestro, video, main, gitops, audio, trending
 
 TXT = ("Relato do incidente INC-2026-4821 em 2026-10-15 às 14:32 UTC. Basicamente, "
        "o serviço PaymentService.charge falhou em payment.js:142 com TIMEOUT_ERROR e "
@@ -454,6 +454,43 @@ class TestDescoberta(Base):
         with mock.patch.object(maestro.requests, "get", lambda *a, **k: self.fail("nao deveria consultar")):
             _DESCOBRIR(m, "groq", maestro.PROVIDERS["groq"][0], "g")
         self.assertEqual(m.slots()[0]["model"], "meu/modelo")
+
+
+class TestTendenciasEPexels(Base):
+    def setUp(self):
+        super().setUp(); trending._CACHE.clear()
+
+    def test_mais_vistos_ordenado_e_cache(self):
+        os.environ["YOUTUBE_API_KEY"] = "yk"
+        n = []
+        def get(url, **kw):
+            n.append(url)
+            return Resp(200, {"items": [
+                {"id": "a1", "snippet": {"title": "A", "channelTitle": "C1", "thumbnails": {"medium": {"url": "u"}}}, "statistics": {"viewCount": "1500"}},
+                {"id": "b2", "snippet": {"title": "B", "channelTitle": "C2"}, "statistics": {"viewCount": "2500000", "likeCount": "9"}}]})
+        with mock.patch("requests.get", get):
+            r = trending.mais_vistos("br")
+            trending.mais_vistos("br")
+        self.assertEqual([i["id"] for i in r], ["b2", "a1"]); self.assertEqual(r[0]["views"], 2500000)
+        self.assertEqual(len(n), 1)                       # segunda chamada veio do cache (poupa a cota)
+
+    def test_sem_chave_e_erro_da_api(self):
+        with self.assertRaises(main.HTTPException) as c:
+            main.tendencias(types.SimpleNamespace(headers={}, client=types.SimpleNamespace(host="3.3.3.3")))
+        self.assertEqual(c.exception.status_code, 503)
+        os.environ["YOUTUBE_API_KEY"] = "ruim"
+        with mock.patch("requests.get", lambda *a, **k: Resp(403, {"error": {"message": "API key not valid"}})):
+            with self.assertRaises(main.HTTPException) as c:
+                main.tendencias(types.SimpleNamespace(headers={}, client=types.SimpleNamespace(host="3.3.3.4")))
+        self.assertEqual(c.exception.status_code, 502); self.assertIn("not valid", c.exception.detail)
+
+    def test_pexels_como_ultimo_recurso_e_aviso(self):
+        os.environ["PEXELS_API_KEY"] = "pk"
+        get = lambda url, **kw: Resp(200, {"videos": [{"video_files": [
+            {"file_type": "video/mp4", "width": 1080, "height": 1920, "link": "https://p/v.mp4"}]}]})
+        with mock.patch("requests.get", get):
+            url, who, dl = video.VideoMaestro(poll_every=0).generate("a dog running in a field")
+        self.assertEqual((url, who, dl), ("https://p/v.mp4", "pexels", None))
 
 
 if __name__ == "__main__":

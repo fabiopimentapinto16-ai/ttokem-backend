@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 import audio
 import gitops
 import pipeline
+import trending
 import ttokem
 import video as video_mod
 from maestro import Maestro
@@ -80,7 +81,7 @@ def raiz():
     return {"ok": True, "app": "Ttoken Studio"}
 
 
-VERSAO = "1.5.0"
+VERSAO = "1.6.0"
 
 
 def _resumo():
@@ -207,6 +208,19 @@ def build_apk(run_id: int, request: Request):
     nome, dados = _git(gitops.baixar_apk, run_id, c)
     return Response(dados, media_type="application/vnd.android.package-archive",
                     headers={"Content-Disposition": f'attachment; filename="{nome}"'})
+
+
+@app.get("/api/tendencias")
+def tendencias(request: Request, regiao: str = "BR", q: str = ""):
+    """Vídeos mais assistidos (API oficial do YouTube) para inspirar ideias originais."""
+    if not _limite(request):
+        raise HTTPException(429, "Limite de pedidos por hora atingido.")
+    try:
+        return {"ok": True, "itens": trending.mais_vistos(regiao, q)}
+    except trending.SemChaveYoutube as e:
+        raise HTTPException(503, str(e))
+    except trending.ErroYoutube as e:
+        raise HTTPException(502, str(e))
 
 
 @app.get("/api/testar")

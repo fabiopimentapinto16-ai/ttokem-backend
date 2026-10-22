@@ -88,8 +88,12 @@ def produzir(ideia, plataforma, llm, videos, report, regenerar=False):
                     VIDEO_CACHE[prompt_video] = (time.time() + VIDEO_CACHE_TTL, url, api_video)
             if dl_headers:      # o arquivo exige token no download
                 report(_src=url, _dl=dl_headers)
+            extra = {}
+            if str(api_video).startswith("pexels"):
+                extra["aviso"] = ("Video de banco gratis (Pexels), nao gerado por IA: "
+                                  "serve de apoio para a sua legenda.")
             report(status="pronto", video_url=url, api_video=api_video,
-                   etapa="Pronto", passo=3)
+                   etapa="Pronto", passo=3, **extra)
         except VideoFailed as e:
             # a legenda continua válida mesmo sem vídeo
             report(status="pronto", video_url="", api_video="nenhum",

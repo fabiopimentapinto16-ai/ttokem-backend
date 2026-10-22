@@ -31,6 +31,7 @@ OpenRouter grátis: 20 req/min e 50 req/dia (1000/dia com ≥ 10 créditos compr
 | `COLAB_SECRET` + notebook `colab/ttoken_colab_video.ipynb` | **GPU T4 grátis do Google Colab** (CogVideoX-2b): vídeos sem custo por vídeo e sem cota de API. O notebook se registra sozinho em `/api/colab/registrar`. Ver seção Colab |
 | `BIGMODEL_API_KEY` | Zhipu CogVideoX-Flash (grátis, pode ter fila) |
 | `TAVUS_API_KEY` | avatar falando o roteiro (não é vídeo de cena; usado por último) |
+| `PEXELS_API_KEY` | banco de vídeos **livres** (plano B: nunca fica sem vídeo; não é vídeo de IA) — https://www.pexels.com/api/ |
 | `VIDEO_PROVIDERS` / `PROXY_URL` | seu proxy estilo OpenAI (`/videos`) |
 | `MPT_URL` | MoneyPrinterTurbo próprio (precisa de servidor; adaptador ainda sem teste real) |
 
@@ -61,7 +62,13 @@ Chat por voz usa Whisper no Groq (`GROQ_API_KEY`).
 Limites: o Colab grátis desliga por inatividade/tempo; ~minutos por vídeo; saída recortada para 9:16.
 Este caminho **ainda não foi testado numa GPU real** (o servidor e o adaptador foram testados com gerador falso).
 
+## Mais assistidos (inspiração)
+`YOUTUBE_API_KEY` (grátis: Google Cloud → ativar *YouTube Data API v3* → Credenciais). `GET /api/tendencias?q=tema`
+lista os vídeos mais vistos (API oficial, cache de 15 min p/ poupar a cota). O app **não baixa vídeos de terceiros**:
+ele mostra títulos/visualizações para você criar uma ideia original. Baixar = só o que você gerou (botão *Salvar na galeria*) ou bancos livres (Pexels).
+
 ## Endpoints
+- `GET /api/tendencias?regiao=BR&q=` → itens {titulo, canal, views, url}
 - `GET /api/testar` → 1 chamada mínima em cada IA configurada, com o **erro real** de cada uma (chave inválida, modelo errado…). Botão "Testar o servidor" do app usa isto
 - `POST /api/transcrever` `{"b64","nome"}` → `texto` (Whisper/Groq)
 - `POST /api/build/arquivo`, `POST /api/build/iniciar`, `GET /api/build/status/{run}`, `GET /api/build/apk/{run}` — cabeçalho `X-Build-Secret`
