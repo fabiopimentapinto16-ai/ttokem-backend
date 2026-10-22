@@ -24,12 +24,10 @@ import requests
 
 # nome: (base_url, modelo padrão — troque por env se o provedor mudar o nome)
 PROVIDERS = {
-    "groq": ("https://api.groq.com/openai/v1", "llama-3.3-70b-versatile"),
+    "groq": ("https://api.groq.com/openai/v1", "openai/gpt-oss-120b"),
     "gemini": ("https://generativelanguage.googleapis.com/v1beta/openai",
-               "gemini-2.5-flash"),
-    "openrouter": ("https://openrouter.ai/api/v1",
-                   "meta-llama/llama-3.3-70b-instruct:free,"
-                   "google/gemma-3-27b-it:free"),
+               "gemini-3.1-flash-lite,gemini-3-flash-preview,gemini-flash-latest"),
+    "openrouter": ("https://openrouter.ai/api/v1", "openrouter/free"),
     "cerebras": ("https://api.cerebras.ai/v1", "llama-3.3-70b"),
     "mistral": ("https://api.mistral.ai/v1", "mistral-small-latest"),
     # Hugging Face Inference Providers (HF_TOKEN): créditos mensais pequenos, fica por último
@@ -37,6 +35,30 @@ PROVIDERS = {
 }
 LEGACY_KEYS = {"gemini": ["GOOGLE_API_KEY"],
                "huggingface": ["HF_TOKEN", "HF_API_KEY", "HUGGINGFACE_TOKEN"]}
+
+
+# Provedores desligam modelos o tempo todo: em vez de confiar em nomes fixos, o maestro
+# pergunta ao provedor quais modelos existem (GET /models) e escolhe os melhores.
+_EXCLUI = ("whisper", "guard", "safeguard", "tts", "orpheus", "compound", "embed", "playai",
+           "image", "audio", "live", "robotics", "moderation", "vision-preview")
+_PREF = {
+    "groq": ["gpt-oss-120b", "qwen3.8", "qwen3.6", "gpt-oss-20b", "llama-3.3", "llama-4", "llama-3.1"],
+    "gemini": ["3.1-flash-lite", "3-flash", "flash-latest", "2.5-flash-lite", "2.5-flash", "flash"],
+}
+
+
+def _rank(name, ids):
+    pref = _PREF.get(name, [])
+    ids = [i for i in ids if not any(x in i.lower() for x in _EXCLUI)]
+    if name == "gemini":
+        ids = [i for i in ids if i.startswith("gemini-") and "-pro" not in i and "exp" not in i]
+
+    def pos(i):
+        for n, t in enumerate(pref):
+            if t in i:
+                return n
+        return 99
+    return sorted(ids, key=lambda i: (pos(i), i))
 
 
 class AllProvidersFailed(Exception):
@@ -62,6 +84,7 @@ class Maestro:
         self.timeout = timeout
         self._cool = {}          # slot -> timestamp de liberação
         self._last = {}          # slot -> último erro (mostrado ao usuário)
+        self._disc = {}          # provedor -> (expira, [modelos descobertos])
         self._lock = threading.Lock()
 
     # ----------------------------------------------------------- slots
@@ -73,13 +96,47 @@ class Maestro:
         for name in order:
             base, default_model = PROVIDERS[name]
             raw = (os.environ.get(f"{name.upper()}_MODELS")
-                   or os.environ.get(f"{name.upper()}_MODEL") or default_model)
+                   or os.environ.get(f"{name.upper()}_MODEL")
+                   or ",".join(self._disc.get(name, (0, []))[1]) or default_model)
             models = [m.strip() for m in raw.split(",") if m.strip()]
             for i, key in enumerate(_keys_for(name)):
                 for model in models:      # 1 chave + N modelos = N slots
                     out.append({"id": f"{name}#{i + 1}:{model}", "name": name,
                                 "base": base, "model": model, "key": key})
         return out
+
+    def _descobrir(self, name, base, key):
+        """Pergunta ao provedor quais modelos existem agora (cache de 6 h)."""
+        if os.environ.get(f"{name.upper()}_MODELS") or os.environ.get(f"{name.upper()}_MODEL"):
+            return                                  # o usuário fixou o modelo
+        if name not in ("groq", "gemini", "openrouter"):
+            return
+        exp, _ = self._disc.get(name, (0, []))
+        if exp > time.time():
+            return
+        try:
+            r = requests.get(f"{base}/models", headers={"Authorization": f"Bearer {key}"},
+                             timeout=10)
+            itens = r.json().get("data", []) if r.status_code == 200 else []
+            if name == "openrouter":
+                livres = []
+                for m in itens:
+                    pr = m.get("pricing") or {}
+                    if str(pr.get("prompt")) == "0" and str(pr.get("completion")) == "0" \
+                            and not any(x in m["id"].lower() for x in _EXCLUI):
+                        livres.append((m.get("context_length") or 0, m["id"]))
+                ids = ["openrouter/free"] + [i for _, i in sorted(livres, reverse=True)][:2]
+            else:
+                ids = _rank(name, [m["id"].replace("models/", "") for m in itens if "id" in m])[:2]
+            self._disc[name] = (time.time() + (6 * 3600 if ids else 300), ids)
+        except Exception:
+            self._disc[name] = (time.time() + 300, [])
+
+    def _descobrir_todos(self):
+        for name, (base, _m) in PROVIDERS.items():
+            keys = _keys_for(name)
+            if keys:
+                self._descobrir(name, base, keys[0])
 
     def _cooling(self, slot_id):
         with self._lock:
@@ -147,10 +204,13 @@ class Maestro:
         else:
             wait = 60
         self._penalize(s["id"], min(wait, 3600))
+        if r.status_code == 404:
+            self._disc.pop(s["name"], None)          # modelo sumiu: redescobrir na próxima
         return None, self._motivo(r)
 
     def chat(self, messages, max_tokens=900, temperature=0.7):
         """Retorna (texto, 'provedor/modelo'). Levanta AllProvidersFailed."""
+        self._descobrir_todos()
         slots = self.slots()
         if not slots:
             raise AllProvidersFailed(
@@ -171,6 +231,8 @@ class Maestro:
     def testar(self):
         """Faz 1 chamada mínima por slot (ignora cooldown). Para o botão 'Testar chaves'."""
         out = []
+        self._disc.clear()
+        self._descobrir_todos()
         for s in self.slots():
             texto, erro = self._tentar(
                 s, [{"role": "user", "content": "Responda apenas: ok"}], 8, 0)

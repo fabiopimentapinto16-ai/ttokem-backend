@@ -41,8 +41,13 @@ class Resp:
 def ok(text): return Resp(200, {"choices": [{"message": {"content": text}}]})
 
 
+_DESCOBRIR = maestro.Maestro._descobrir      # original (os testes não saem para a internet)
+
+
 class Base(unittest.TestCase):
     def setUp(self):
+        p0 = mock.patch.object(maestro.Maestro, "_descobrir", lambda *a, **k: None)
+        p0.start(); self.addCleanup(p0.stop)
         clean = {k: v for k, v in os.environ.items()
                  if not (k.endswith(("_API_KEY", "_API_KEYS", "_KEY", "_TOKEN")) or
                          k in ("VIDEO_PROVIDERS", "PROXY_URL", "LLM_ORDER", "FAL_KEY", "MPT_URL",
@@ -412,6 +417,43 @@ class TestEstimativa(Base):
         self.assertEqual(video.VideoMaestro().proxima(), ("magichour", 1, 3))
         del os.environ["MAGIC_HOUR_API_KEY"]
         self.assertIsNone(video.VideoMaestro().proxima())      # sem chave: nenhum
+
+
+class TestDescoberta(Base):
+    def test_modelos_descobertos_substituem_os_desligados(self):
+        os.environ["GROQ_API_KEY"] = "g"; os.environ["OPENROUTER_API_KEY"] = "o"
+        def get(url, **kw):
+            if "groq" in url:
+                return Resp(200, {"data": [{"id": "whisper-large-v3"}, {"id": "llama-3.3-70b-versatile-old"},
+                                           {"id": "openai/gpt-oss-120b"}, {"id": "openai/gpt-oss-safeguard-20b"}]})
+            return Resp(200, {"data": [
+                {"id": "a/pago", "pricing": {"prompt": "0.1", "completion": "0.1"}, "context_length": 9e5},
+                {"id": "b/gratis:free", "pricing": {"prompt": "0", "completion": "0"}, "context_length": 100000},
+                {"id": "c/gratis:free", "pricing": {"prompt": "0", "completion": "0"}, "context_length": 200000}]})
+        m = maestro.Maestro()
+        with mock.patch.object(maestro.requests, "get", get):
+            _DESCOBRIR(m, "groq", maestro.PROVIDERS["groq"][0], "g")
+            _DESCOBRIR(m, "openrouter", maestro.PROVIDERS["openrouter"][0], "o")
+        modelos = [s["model"] for s in m.slots()]
+        self.assertEqual(modelos[0], "openai/gpt-oss-120b")
+        self.assertNotIn("whisper-large-v3", modelos); self.assertNotIn("openai/gpt-oss-safeguard-20b", modelos)
+        self.assertIn("openrouter/free", modelos); self.assertIn("c/gratis:free", modelos); self.assertNotIn("a/pago", modelos)
+
+    def test_gemini_ignora_pro_e_usa_flash_lite_primeiro(self):
+        os.environ["GEMINI_KEY"] = "k"
+        get = lambda url, **kw: Resp(200, {"data": [{"id": "models/gemini-2.5-pro"}, {"id": "models/gemini-2.5-flash"},
+                                                    {"id": "models/gemini-3.1-flash-lite"}, {"id": "models/text-embedding-004"}]})
+        m = maestro.Maestro()
+        with mock.patch.object(maestro.requests, "get", get):
+            _DESCOBRIR(m, "gemini", maestro.PROVIDERS["gemini"][0], "k")
+        self.assertEqual([s["model"] for s in m.slots()], ["gemini-3.1-flash-lite", "gemini-2.5-flash"])
+
+    def test_modelo_fixo_por_env_nao_e_trocado(self):
+        os.environ["GROQ_API_KEY"] = "g"; os.environ["GROQ_MODEL"] = "meu/modelo"
+        m = maestro.Maestro()
+        with mock.patch.object(maestro.requests, "get", lambda *a, **k: self.fail("nao deveria consultar")):
+            _DESCOBRIR(m, "groq", maestro.PROVIDERS["groq"][0], "g")
+        self.assertEqual(m.slots()[0]["model"], "meu/modelo")
 
 
 if __name__ == "__main__":
