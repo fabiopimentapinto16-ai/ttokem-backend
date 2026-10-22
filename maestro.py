@@ -61,6 +61,7 @@ class Maestro:
     def __init__(self, timeout: int = 25):
         self.timeout = timeout
         self._cool = {}          # slot -> timestamp de liberação
+        self._last = {}          # slot -> último erro (mostrado ao usuário)
         self._lock = threading.Lock()
 
     # ----------------------------------------------------------- slots
@@ -93,56 +94,88 @@ class Maestro:
         for s in self.slots():
             wait = max(0, round(self._cooling(s["id"])))
             res.append({"slot": s["id"], "model": s["model"],
-                        "disponivel": wait == 0, "volta_em_s": wait})
+                        "disponivel": wait == 0, "volta_em_s": wait,
+                        "ultimo_erro": self._last.get(s["id"], "")})
         return res
 
     # ------------------------------------------------------------ chamada
+    @staticmethod
+    def _motivo(r):
+        """Texto curto do erro do provedor (para o usuário saber o que consertar)."""
+        try:
+            j = r.json()
+            e = j.get("error", j) if isinstance(j, dict) else j
+            if isinstance(e, list) and e:
+                e = e[0].get("error", e[0]) if isinstance(e[0], dict) else e[0]
+            msg = e.get("message") if isinstance(e, dict) else str(e)
+        except Exception:
+            msg = r.text
+        return f"HTTP {r.status_code} ({str(msg or '').strip()[:90]})"
+
+    def _tentar(self, s, messages, max_tokens, temperature):
+        """Uma chamada. Retorna (texto|None, erro|None) e já aplica o cooldown."""
+        try:
+            r = requests.post(
+                f"{s['base']}/chat/completions",
+                headers={"Authorization": f"Bearer {s['key']}"},
+                json={"model": s["model"], "messages": messages,
+                      "max_tokens": max_tokens, "temperature": temperature},
+                timeout=self.timeout)
+        except requests.RequestException as e:
+            self._penalize(s["id"], 60)
+            return None, f"rede ({type(e).__name__}: {str(e)[:60]})"
+        if r.status_code == 200:
+            try:
+                text = r.json()["choices"][0]["message"]["content"]
+            except (KeyError, IndexError, ValueError, TypeError):
+                self._penalize(s["id"], 60)
+                return None, "resposta inválida"
+            if text and text.strip():
+                self._last.pop(s["id"], None)
+                self._penalize(s["id"], 0)
+                return text.strip(), None
+            return None, "resposta vazia"
+        body = (r.text or "")[:300].lower()
+        if r.status_code == 429:
+            retry = r.headers.get("Retry-After", "")
+            wait = int(retry) if retry.isdigit() else (
+                3600 if "quota" in body or "daily" in body else 90)
+        elif r.status_code in (402, 403) or "quota" in body or "credit" in body:
+            wait = 1800
+        elif r.status_code in (401, 404):
+            wait = 600          # chave/modelo inválido: espera pouco (você pode corrigir)
+        else:
+            wait = 60
+        self._penalize(s["id"], min(wait, 3600))
+        return None, self._motivo(r)
+
     def chat(self, messages, max_tokens=900, temperature=0.7):
         """Retorna (texto, 'provedor/modelo'). Levanta AllProvidersFailed."""
         slots = self.slots()
         if not slots:
             raise AllProvidersFailed(
                 "Nenhuma chave de IA configurada (GROQ_API_KEY, GEMINI_API_KEY, ...)")
+        livres = [s for s in slots if self._cooling(s["id"]) <= 0]
+        # Se TODOS estão esfriando, tenta mesmo assim (o mais próximo de voltar
+        # primeiro): evita ficar preso sem nunca testar de novo.
+        fila = livres or sorted(slots, key=lambda x: self._cooling(x["id"]))
         errors = []
-        for s in slots:
-            if self._cooling(s["id"]) > 0:
-                errors.append(f"{s['id']}: em cooldown")
-                continue
-            try:
-                r = requests.post(
-                    f"{s['base']}/chat/completions",
-                    headers={"Authorization": f"Bearer {s['key']}"},
-                    json={"model": s["model"], "messages": messages,
-                          "max_tokens": max_tokens, "temperature": temperature},
-                    timeout=self.timeout)
-            except requests.RequestException as e:
-                self._penalize(s["id"], 60)
-                errors.append(f"{s['id']}: rede ({type(e).__name__})")
-                continue
-
-            if r.status_code == 200:
-                try:
-                    text = r.json()["choices"][0]["message"]["content"]
-                except (KeyError, IndexError, ValueError):
-                    self._penalize(s["id"], 60)
-                    errors.append(f"{s['id']}: resposta inválida")
-                    continue
-                if text and text.strip():
-                    return text.strip(), f"{s['name']}/{s['model']}"
-                errors.append(f"{s['id']}: resposta vazia")
-                continue
-
-            body = (r.text or "")[:300].lower()
-            if r.status_code == 429:
-                retry = r.headers.get("Retry-After", "")
-                wait = int(retry) if retry.isdigit() else (
-                    3600 if "quota" in body or "daily" in body else 90)
-            elif r.status_code in (402, 403) or "quota" in body or "credit" in body:
-                wait = 3600
-            elif r.status_code in (401, 404):
-                wait = 6 * 3600     # chave/modelo inválido: não insistir
-            else:
-                wait = 60
-            self._penalize(s["id"], wait)
-            errors.append(f"{s['id']}: HTTP {r.status_code}")
+        for s in fila:
+            texto, erro = self._tentar(s, messages, max_tokens, temperature)
+            if texto:
+                return texto, f"{s['name']}/{s['model']}"
+            self._last[s["id"]] = erro
+            errors.append(f"{s['id']}: {erro}")
         raise AllProvidersFailed("; ".join(errors))
+
+    def testar(self):
+        """Faz 1 chamada mínima por slot (ignora cooldown). Para o botão 'Testar chaves'."""
+        out = []
+        for s in self.slots():
+            texto, erro = self._tentar(
+                s, [{"role": "user", "content": "Responda apenas: ok"}], 8, 0)
+            if erro:
+                self._last[s["id"]] = erro
+            out.append({"slot": s["id"], "provedor": s["name"], "ok": bool(texto),
+                        "erro": erro or ""})
+        return out

@@ -62,6 +62,7 @@ Limites: o Colab grátis desliga por inatividade/tempo; ~minutos por vídeo; sa�
 Este caminho **ainda não foi testado numa GPU real** (o servidor e o adaptador foram testados com gerador falso).
 
 ## Endpoints
+- `GET /api/testar` → 1 chamada mínima em cada IA configurada, com o **erro real** de cada uma (chave inválida, modelo errado…). Botão "Testar o servidor" do app usa isto
 - `POST /api/transcrever` `{"b64","nome"}` → `texto` (Whisper/Groq)
 - `POST /api/build/arquivo`, `POST /api/build/iniciar`, `GET /api/build/status/{run}`, `GET /api/build/apk/{run}` — cabeçalho `X-Build-Secret`
 - `POST /api/chat` `{"mensagem": "...", "historico": []}` → `resposta` (aba CHAT/CÓDIGO do app)
@@ -72,6 +73,10 @@ Este caminho **ainda não foi testado numa GPU real** (o servidor e o adaptador 
 - `POST /api/comprimir` `{"texto": "...", "modo": "auto|light|v24"}` → testa o Ttokem
 - `GET /health` → provedores configurados e em cooldown (sem expor chaves)
 - `GET /` → ping (acorda o container)
+
+## Deploy
+Há um `Dockerfile` (Python 3.12, porta 8000 com `EXPOSE 8000`). O `main.py` escuta na 8000 e também no `PORT` do painel, se diferente.
+Se um deploy falhar no health check, o SnapDeploy mantém o anterior no ar — veja o log em Deployments.
 
 ## Rodar / testar
 ```

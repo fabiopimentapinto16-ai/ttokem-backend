@@ -378,5 +378,41 @@ class TestGitEAudio(Base):
             self.assertEqual(audio.transcrever(b"x"), "ola mundo")
 
 
+class TestMaestroErros(Base):
+    def test_erro_real_aparece_e_cooldown_nao_trava(self):
+        os.environ["GROQ_API_KEY"] = "ruim"
+        calls = []
+        def post(url, **kw):
+            calls.append(url)
+            return Resp(401, {"error": {"message": "Invalid API Key"}})
+        m = maestro.Maestro()
+        with mock.patch.object(maestro.requests, "post", post):
+            with self.assertRaises(maestro.AllProvidersFailed) as c:
+                m.chat([{"role": "user", "content": "oi"}])
+            self.assertIn("Invalid API Key", str(c.exception))
+            n1 = len(calls)
+            with self.assertRaises(maestro.AllProvidersFailed):
+                m.chat([{"role": "user", "content": "oi"}])      # tudo esfriando: tenta de novo
+            self.assertGreater(len(calls), n1)
+        self.assertIn("Invalid", m.status()[0]["ultimo_erro"])
+
+    def test_testar_e_recuperacao(self):
+        os.environ["GROQ_API_KEY"] = "k"
+        m = maestro.Maestro()
+        with mock.patch.object(maestro.requests, "post", lambda *a, **k: Resp(429, {})):
+            self.assertFalse(m.testar()[0]["ok"])
+        with mock.patch.object(maestro.requests, "post", lambda *a, **k: ok("ok")):
+            self.assertTrue(m.testar()[0]["ok"])
+            self.assertEqual(m.chat([{"role": "user", "content": "x"}])[0], "ok")
+
+
+class TestEstimativa(Base):
+    def test_estimativa_do_primeiro_gerador(self):
+        os.environ["MAGIC_HOUR_API_KEY"] = "k"
+        self.assertEqual(video.VideoMaestro().proxima(), ("magichour", 1, 3))
+        del os.environ["MAGIC_HOUR_API_KEY"]
+        self.assertIsNone(video.VideoMaestro().proxima())      # sem chave: nenhum
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

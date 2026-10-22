@@ -65,9 +65,16 @@ def produzir(ideia, plataforma, llm, videos, report, regenerar=False):
             tags = tags.split()
         legenda = str(data.get("legenda", "")).strip()
         texto = (legenda + ("\n\n" + " ".join(tags) if tags else "")).strip()
+        eta = {}
+        try:
+            prox = videos.proxima()
+            if prox:
+                eta = {"gerador": prox[0], "eta_min": prox[1], "eta_max": prox[2]}
+        except Exception:
+            pass
         report(api_llm=api_llm, titulo=data.get("titulo", ""),
                roteiro=data.get("roteiro", ""), texto=texto,
-               etapa="Gerando vídeo", passo=2)
+               etapa="Gerando vídeo", passo=2, **eta)
 
         # 3) Maestro de vídeo (prompt em linguagem natural, NUNCA o codebook)
         prompt_video = str(data.get("prompt_video") or ideia)[:500]

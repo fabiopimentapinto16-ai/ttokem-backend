@@ -140,6 +140,11 @@ def _providers():
     return [p for n in order for p in out.get(n, [])]
 
 
+# Estimativa (minutos) por gerador — valores aproximados, não garantidos
+ETA = {"colab": (4, 8), "magichour": (1, 3), "fal": (1, 3), "replicate": (2, 6),
+       "bigmodel": (1, 4), "tavus": (2, 5), "mpt": (2, 7), "proxy": (1, 5)}
+
+
 class VideoMaestro:
     def __init__(self, poll_every=5, max_wait=240):
         self.poll_every, self.max_wait = poll_every, max_wait
@@ -150,6 +155,14 @@ class VideoMaestro:
         return [{"gerador": p["id"], "tipo": p["kind"],
                  "disponivel": self._cool.get(p["id"], 0) <= now}
                 for p in _providers()]
+
+    def proxima(self):
+        """(tipo, min, max) do gerador que será tentado primeiro, ou None."""
+        for p in _providers():
+            if self._cool.get(p["id"], 0) <= time.time():
+                lo, hi = ETA.get(p["kind"], (2, 6))
+                return p["kind"], lo, hi
+        return None
 
     def _penalize(self, pid, seconds):
         with self._lock:

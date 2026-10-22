@@ -80,7 +80,7 @@ def raiz():
     return {"ok": True, "app": "Ttoken Studio"}
 
 
-VERSAO = "1.4.0"
+VERSAO = "1.5.0"
 
 
 def _resumo():
@@ -209,6 +209,15 @@ def build_apk(run_id: int, request: Request):
                     headers={"Content-Disposition": f'attachment; filename="{nome}"'})
 
 
+@app.get("/api/testar")
+def testar(request: Request):
+    """Faz 1 chamada mínima em cada IA configurada e diz qual funciona e qual erro deu
+    (nunca mostra chaves). Use para descobrir chave inválida/modelo errado."""
+    if not _limite(request):
+        raise HTTPException(429, "Limite de pedidos por hora atingido.")
+    return {"ok": True, "textos": llm.testar(), "videos": videos.status()}
+
+
 @app.post("/api/comprimir")
 def comprimir(req: ComprimirReq):
     if req.modo not in ("auto", "light", "v24"):
@@ -276,6 +285,19 @@ def baixar_video(job_id: str):
 print("[ttoken] v%s | python %s | provedores ativos: %s" % (
     VERSAO, sys.version.split()[0], _resumo()), flush=True)
 
-if __name__ == "__main__":      # python main.py  (alguns hosts iniciam assim)
+if __name__ == "__main__":      # python main.py  (Dockerfile e hosts que iniciam assim)
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", "8000")))
+    # Porta 8000 fixa (a que o SnapDeploy detecta pelo EXPOSE). Se o painel injetar um
+    # PORT diferente, escuta nele também: assim o health check passa nos dois casos.
+    portas = [8000]
+    try:
+        extra = int(os.environ.get("PORT", "8000"))
+        if extra not in portas:
+            portas.append(extra)
+    except ValueError:
+        pass
+    servers = [uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=p, log_level="info"))
+               for p in portas]
+    for srv in servers[1:]:
+        threading.Thread(target=srv.run, daemon=True).start()
+    servers[0].run()
