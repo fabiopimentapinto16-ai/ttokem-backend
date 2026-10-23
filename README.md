@@ -62,6 +62,15 @@ Chat por voz usa Whisper no Groq (`GROQ_API_KEY`).
 Limites: o Colab grátis desliga por inatividade/tempo; ~minutos por vídeo; saída recortada para 9:16.
 Este caminho **ainda não foi testado numa GPU real** (o servidor e o adaptador foram testados com gerador falso).
 
+## Modo Anúncio, foto do produto e "meu vídeo"
+- `POST /api/gerar` aceita `tipo:"anuncio"` (a IA escreve um comercial: gancho, produto em destaque, CTA),
+  `imagem_b64` (foto JPG/PNG/WEBP até ~4 MB) e `sem_video:true` (só legenda, para o vídeo que o usuário fez em outro app).
+- Foto → vídeo usa só geradores que aceitam imagem: **Magic Hour** (`/v1/image-to-video`, créditos grátis) e **fal.ai**
+  (`FAL_I2V_MODEL`, padrão MiniMax Hailuo 02, pago por uso). A foto fica num link aleatório (`/api/img/{id}`) por 1 h.
+  Se nenhum aceitar a foto, o vídeo sai só pelo texto e o app avisa.
+- Veo (Gemini API) e Hailuo (API) **não têm plano grátis**; o "grátis" dos vídeos de divulgação é só nos apps deles.
+  Por isso o botão "Usar vídeo meu" deixa você gerar lá e postar por aqui com legenda feita pelo Ttoken.
+
 ## Mais assistidos (inspiração)
 `YOUTUBE_API_KEY` (grátis: Google Cloud → ativar *YouTube Data API v3* → Credenciais). `GET /api/tendencias?q=tema`
 lista os vídeos mais vistos (API oficial, cache de 15 min p/ poupar a cota). O app **não baixa vídeos de terceiros**:

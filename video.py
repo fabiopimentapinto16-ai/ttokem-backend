@@ -149,6 +149,9 @@ ETA = {"pexels": (0, 1), "colab": (4, 8), "magichour": (1, 3), "fal": (1, 3), "r
        "bigmodel": (1, 4), "tavus": (2, 5), "mpt": (2, 7), "proxy": (1, 5)}
 
 
+I2V = ("magichour", "fal")      # geradores com foto-para-vídeo (adaptados da documentação)
+
+
 class VideoMaestro:
     def __init__(self, poll_every=5, max_wait=240):
         self.poll_every, self.max_wait = poll_every, max_wait
@@ -311,13 +314,16 @@ class VideoMaestro:
         self._wait(check)
         return f"{p['base']}/videos/{job}/content", (hdr or None)
 
-    def _magichour(self, p, prompt):
+    def _magichour(self, p, prompt, imagem=None):
         hdr = {"Authorization": f"Bearer {p['key']}", "Content-Type": "application/json"}
         body = {"name": "ttoken", "model": p["model"], "aspect_ratio": "9:16",
                 "end_seconds": int(os.environ.get("MAGIC_HOUR_SECONDS", "5")),
                 "style": {"prompt": prompt}}
+        if imagem:      # foto do produto -> vídeo (a imagem define o enquadramento)
+            body.pop("aspect_ratio")
+            body["assets"] = {"image_file_path": imagem}
         body.update(_extra("MAGIC_HOUR_EXTRA_INPUT"))
-        url = "https://api.magichour.ai/v1/text-to-video"
+        url = "https://api.magichour.ai/v1/" + ("image-to-video" if imagem else "text-to-video")
         r = requests.post(url, headers=hdr, json=body, timeout=30)
         if r.status_code in (400, 422) and "aspect_ratio" in body:
             body.pop("aspect_ratio")        # nem todo modelo aceita 9:16
@@ -366,13 +372,19 @@ class VideoMaestro:
             raise VideoFailed("resposta sem URL de vídeo")
         return box["url"], None
 
-    def _fal(self, p, prompt):
+    def _fal(self, p, prompt, imagem=None):
         hdr = {"Authorization": f"Key {p['key']}", "Content-Type": "application/json"}
-        body = {"prompt": prompt, "aspect_ratio": "9:16"}
-        if "seedance" in p["model"]:
-            body.update(duration="5", resolution="480p")
+        modelo = p["model"]
+        if imagem:      # foto -> vídeo (MiniMax Hailuo por padrão; pago por uso na fal.ai)
+            modelo = os.environ.get("FAL_I2V_MODEL",
+                                    "fal-ai/minimax/hailuo-02/standard/image-to-video")
+            body = {"prompt": prompt, "image_url": imagem}
+        else:
+            body = {"prompt": prompt, "aspect_ratio": "9:16"}
+            if "seedance" in modelo:
+                body.update(duration="5", resolution="480p")
         body.update(_extra("FAL_EXTRA_INPUT"))
-        r = requests.post(f"https://queue.fal.run/{p['model']}", headers=hdr,
+        r = requests.post(f"https://queue.fal.run/{modelo}", headers=hdr,
                           json=body, timeout=30)
         self._guard(r)
         sub = r.json()
@@ -424,9 +436,12 @@ class VideoMaestro:
         return out, ({"Authorization": f"Bearer {p['key']}"} if needs_auth else None)
 
     # ------------------------------------------------------------ geral
-    def generate(self, prompt: str):
-        """Retorna (video_url, gerador, headers_de_download|None)."""
+    def generate(self, prompt: str, imagem_url: str = ""):
+        """Retorna (video_url, gerador, headers_de_download|None).
+        Com `imagem_url`, só tenta geradores foto-para-vídeo (magichour, fal)."""
         provs = _providers()
+        if imagem_url:
+            provs = [p for p in provs if p["kind"] in I2V]
         if not provs:
             raise VideoFailed("Nenhum gerador de vídeo configurado "
                               "(FAL_KEY, REPLICATE_API_TOKEN ou VIDEO_PROVIDERS)")
@@ -436,7 +451,11 @@ class VideoMaestro:
                 errors.append(f"{p['id']}: em cooldown")
                 continue
             try:
-                url, dl_headers = getattr(self, "_" + p["kind"])(p, prompt)
+                fn = getattr(self, "_" + p["kind"])
+                if imagem_url:
+                    url, dl_headers = fn(p, prompt, imagem_url)
+                    return url, p["id"] + "+foto", dl_headers
+                url, dl_headers = fn(p, prompt)
                 return url, p["id"], dl_headers
             except NoCredit as e:
                 self._penalize(p["id"], 3600)

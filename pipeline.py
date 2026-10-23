@@ -20,6 +20,18 @@ SYSTEM = (
     '"hashtags" (lista de 5 a 8 strings com #), "prompt_video" (descrição '
     "visual da cena em INGLÊS, até 350 caracteres, sem texto na tela).")
 
+SYSTEM_ANUNCIO = (
+    "Você é diretor de arte de comerciais curtos para redes sociais. Responda SOMENTE "
+    "com JSON válido, com as chaves: "
+    '"titulo" (nome da campanha), "roteiro" (4 cenas: 1 gancho visual impactante que '
+    'remete ao produto, 2 ambiente/fachada, 3 close do produto com luz cinematográfica, '
+    '4 uso/unboxing e chamada para ação), "legenda" (copy de venda em português do Brasil: '
+    'gancho, benefício, prova, chamada para comprar), "hashtags" (5 a 8 com #), '
+    '"prompt_video" (INGLÊS, até 350 caracteres, estilo cinematic commercial: movimento de '
+    "câmera (slow dolly-in, orbit), iluminação, produto em destaque, partículas/brilho, "
+    "sem texto na tela; se houver foto do produto, descreva como ANIMAR a foto mantendo o "
+    "produto idêntico).")
+
 LLM_CACHE, LLM_CACHE_TTL = {}, 6 * 3600      # mesma ideia = mesmo roteiro, sem gastar crédito
 VIDEO_CACHE, VIDEO_CACHE_TTL = {}, 3600      # links de vídeo expiram em ~1h
 
@@ -33,7 +45,8 @@ def parse_json(text: str):
         return None
 
 
-def produzir(ideia, plataforma, llm, videos, report, regenerar=False):
+def produzir(ideia, plataforma, llm, videos, report, regenerar=False,
+             tipo="normal", imagem_url="", sem_video=False):
     """Roda o fluxo todo. `report(**campos)` recebe o progresso e o resultado.
     Sempre termina com report(status="pronto") ou report(status="erro")."""
     try:
@@ -45,14 +58,15 @@ def produzir(ideia, plataforma, llm, videos, report, regenerar=False):
                        "economia_pct": comp["saving_pct"], "modo": comp["mode"]})
 
         # 2) Maestro de IAs (troca sozinho se um crédito acabar)
-        ckey = hashlib.sha1(f"{plataforma}|{comp['text'].lower()}".encode()).hexdigest()
+        anuncio = tipo == "anuncio"
+        ckey = hashlib.sha1(f"{tipo}|{plataforma}|{comp['text'].lower()}".encode()).hexdigest()
         hit = LLM_CACHE.get(ckey)
         if hit and not regenerar and hit[0] > time.time():
             data, api_llm = hit[1], hit[2] + " (cache)"
         else:
             try:
                 raw, api_llm = llm.chat([
-                    {"role": "system", "content": SYSTEM},
+                    {"role": "system", "content": SYSTEM_ANUNCIO if anuncio else SYSTEM},
                     {"role": "user",
                      "content": f"Plataforma: {plataforma}\nIdeia: {comp['text']}"}])
             except AllProvidersFailed as e:
@@ -76,19 +90,32 @@ def produzir(ideia, plataforma, llm, videos, report, regenerar=False):
                roteiro=data.get("roteiro", ""), texto=texto,
                etapa="Gerando vídeo", passo=2, **eta)
 
+        if sem_video:       # o usuário já tem o vídeo (feito em outro app): só legenda
+            report(status="pronto", video_url="", api_video="seu video",
+                   etapa="Pronto", passo=3)
+            return
+
         # 3) Maestro de vídeo (prompt em linguagem natural, NUNCA o codebook)
         prompt_video = str(data.get("prompt_video") or ideia)[:500]
-        vhit = VIDEO_CACHE.get(prompt_video)
+        vhit = None if imagem_url else VIDEO_CACHE.get(prompt_video)
+        extra_aviso = ""
         try:
             if vhit and not regenerar and vhit[0] > time.time():
                 url, api_video, dl_headers = vhit[1], vhit[2] + " (cache)", None
             else:
-                url, api_video, dl_headers = videos.generate(prompt_video)
-                if not dl_headers:
+                if imagem_url:
+                    try:
+                        url, api_video, dl_headers = videos.generate(prompt_video, imagem_url)
+                    except VideoFailed as e:   # sem gerador de foto: tenta só com texto
+                        extra_aviso = f"Foto nao usada ({str(e)[:90]}); video feito so pelo texto."
+                        url, api_video, dl_headers = videos.generate(prompt_video)
+                else:
+                    url, api_video, dl_headers = videos.generate(prompt_video)
+                if not dl_headers and not imagem_url:
                     VIDEO_CACHE[prompt_video] = (time.time() + VIDEO_CACHE_TTL, url, api_video)
             if dl_headers:      # o arquivo exige token no download
                 report(_src=url, _dl=dl_headers)
-            extra = {}
+            extra = {"aviso": extra_aviso} if extra_aviso else {}
             if str(api_video).startswith("pexels"):
                 extra["aviso"] = ("Video de banco gratis (Pexels), nao gerado por IA: "
                                   "serve de apoio para a sua legenda.")

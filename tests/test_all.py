@@ -493,5 +493,69 @@ class TestTendenciasEPexels(Base):
         self.assertEqual((url, who, dl), ("https://p/v.mp4", "pexels", None))
 
 
+class TestAnuncioFotoMeuVideo(Base):
+    JPG = b"\xff\xd8\xff\xe0" + b"0" * 50
+
+    def _rq(self):
+        return types.SimpleNamespace(headers={}, client=types.SimpleNamespace(host="7.7.7.7"))
+
+    def test_foto_valida_vira_url_temporaria_e_serve_bytes(self):
+        import base64
+        url = main._guardar_imagem(base64.b64encode(self.JPG).decode())
+        self.assertIn("/api/img/", url)
+        guardada = main.IMGS[url.rsplit("/", 1)[1]]
+        self.assertEqual((guardada[0], guardada[1]), (self.JPG, "image/jpeg"))
+        with self.assertRaises(main.HTTPException):          # id desconhecido/expirado
+            main.baixar_imagem("naoexiste")
+        with self.assertRaises(main.HTTPException): main._guardar_imagem(base64.b64encode(b"nao sou imagem").decode())
+        with self.assertRaises(main.HTTPException): main._guardar_imagem(base64.b64encode(self.JPG + b"0" * 4_300_000).decode())
+
+    def test_foto_para_video_usa_magichour_image_to_video(self):
+        os.environ["MAGIC_HOUR_API_KEY"] = "k"; os.environ["FAL_KEY"] = ""
+        sent = {}
+        def post(url, **kw):
+            sent["url"], sent["body"] = url, kw["json"]; return Resp(200, {"id": "p1"})
+        get = lambda url, **kw: Resp(200, {"status": "complete", "downloads": [{"url": "https://m/v.mp4"}]})
+        with mock.patch("requests.post", post), mock.patch("requests.get", get):
+            url, who, dl = video.VideoMaestro(poll_every=0).generate("animate product", "https://x/api/img/abc")
+        self.assertTrue(sent["url"].endswith("/v1/image-to-video"))
+        self.assertEqual(sent["body"]["assets"], {"image_file_path": "https://x/api/img/abc"})
+        self.assertNotIn("aspect_ratio", sent["body"]); self.assertEqual(who, "magichour:default+foto")
+
+    def test_foto_ignora_geradores_sem_foto_para_video(self):
+        os.environ["REPLICATE_API_TOKEN"] = "r"
+        with self.assertRaises(video.VideoFailed):
+            video.VideoMaestro(poll_every=0).generate("x", "https://x/api/img/abc")
+
+    def test_pipeline_anuncio_usa_prompt_de_comercial_e_cai_para_texto(self):
+        os.environ["GROQ_API_KEY"] = "a"
+        visto = {}
+        class V:
+            def proxima(s): return None
+            def generate(s, prompt, imagem=""):
+                if imagem: raise video.VideoFailed("sem gerador de foto")
+                return "https://v/t.mp4", "colab", None
+        def post(url, **kw):
+            visto["system"] = kw["json"]["messages"][0]["content"]
+            return ok('{"titulo":"T","legenda":"Compre!","hashtags":["#a"],"prompt_video":"cinematic perfume"}')
+        out = {}
+        with mock.patch.object(maestro.requests, "post", post):
+            main.pipeline.produzir("perfume dourado", "instagram", maestro.Maestro(), V(),
+                                   lambda **kw: out.update(kw), tipo="anuncio", imagem_url="https://x/i")
+        self.assertIn("diretor de arte", visto["system"])
+        self.assertEqual(out["status"], "pronto"); self.assertIn("Foto nao usada", out["aviso"])
+
+    def test_sem_video_so_legenda(self):
+        os.environ["GROQ_API_KEY"] = "a"
+        class V:
+            def proxima(s): return None
+            def generate(s, *a): raise AssertionError('nao deveria gerar video')
+        out = {}
+        with mock.patch.object(maestro.requests, "post", lambda *a, **k: ok('{"legenda":"L","prompt_video":"p"}')):
+            main.pipeline.produzir("meu video", "tiktok", maestro.Maestro(), V(),
+                                   lambda **kw: out.update(kw), sem_video=True)
+        self.assertEqual((out["status"], out["api_video"], out["texto"]), ("pronto", "seu video", "L"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

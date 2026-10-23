@@ -36,6 +36,7 @@ llm = Maestro()
 videos = VideoMaestro()
 pool = ThreadPoolExecutor(max_workers=4)
 JOBS, JOBS_LOCK = {}, threading.Lock()
+IMGS = {}                      # id -> (bytes, mime, expira): foto do produto, 1 h
 JOB_TTL = 3600
 RATE, RATE_LOCK = defaultdict(deque), threading.Lock()
 RATE_LIMIT = int(os.environ.get("RATE_LIMIT_PER_HOUR", "20"))   # pedidos por IP/hora
@@ -46,6 +47,9 @@ class GerarReq(BaseModel):
     ideia: str = Field(min_length=3, max_length=4000)
     plataforma: str = "instagram"
     regenerar: bool = False        # True ignora o cache e gera de novo
+    tipo: str = "normal"           # "anuncio" = comercial de produto
+    imagem_b64: str = Field(default="", max_length=6_000_000)   # foto do produto (opcional)
+    sem_video: bool = False        # usuário já tem o vídeo: só gerar legenda
 
 
 class ComprimirReq(BaseModel):
@@ -58,14 +62,34 @@ def _set(job_id, **kw):
         JOBS[job_id].update(kw, atualizado=time.time())
 
 
+def _guardar_imagem(b64: str):
+    """Valida a foto e devolve a URL pública temporária (id aleatório, expira em 1 h)."""
+    try:
+        dados = base64.b64decode(b64, validate=False)
+    except ValueError:
+        raise HTTPException(400, "foto inválida")
+    if len(dados) > 4_200_000:
+        raise HTTPException(413, "foto grande demais (máx. ~4 MB)")
+    mime = ("image/jpeg" if dados[:3] == b"\xff\xd8\xff" else
+            "image/png" if dados[:8] == b"\x89PNG\r\n\x1a\n" else
+            "image/webp" if dados[:4] == b"RIFF" and dados[8:12] == b"WEBP" else "")
+    if not mime:
+        raise HTTPException(400, "use foto JPG, PNG ou WEBP")
+    img_id = uuid.uuid4().hex
+    IMGS[img_id] = (dados, mime, time.time() + 3600)
+    return f"{PUBLIC_URL}/api/img/{img_id}"
+
+
 def _cleanup():
+    for k in [k for k, v in IMGS.items() if v[2] < time.time()]:
+        IMGS.pop(k, None)
     cut = time.time() - JOB_TTL
     with JOBS_LOCK:
         for k in [k for k, v in JOBS.items() if v["atualizado"] < cut]:
             del JOBS[k]
 
 
-def _run(job_id, req: GerarReq):
+def _run(job_id, req: GerarReq, imagem_url=""):
     def report(**kw):
         if kw.get("video_url"):
             with JOBS_LOCK:
@@ -73,7 +97,8 @@ def _run(job_id, req: GerarReq):
                     kw["video_url"] = f"{PUBLIC_URL}/api/video/{job_id}"
         _set(job_id, **kw)
 
-    pipeline.produzir(req.ideia, req.plataforma, llm, videos, report, req.regenerar)
+    pipeline.produzir(req.ideia, req.plataforma, llm, videos, report, req.regenerar,
+                      tipo=req.tipo, imagem_url=imagem_url, sem_video=req.sem_video)
 
 
 @app.get("/")
@@ -81,7 +106,7 @@ def raiz():
     return {"ok": True, "app": "Ttoken Studio"}
 
 
-VERSAO = "1.6.0"
+VERSAO = "1.7.0"
 
 
 def _resumo():
@@ -259,13 +284,24 @@ def gerar(req: GerarReq, request: Request):
     if not _limite(request):
         raise HTTPException(429, "Limite de pedidos por hora atingido. Tente mais tarde.")
     _cleanup()
+    imagem_url = _guardar_imagem(req.imagem_b64) if req.imagem_b64 else ""
     job_id = uuid.uuid4().hex[:12]
     with JOBS_LOCK:
         JOBS[job_id] = {"status": "processando", "etapa": "Iniciando",
                         "passo": 0, "criado": time.time(),
                         "atualizado": time.time()}
-    pool.submit(_run, job_id, req)
+    pool.submit(_run, job_id, req, imagem_url)
     return {"success": True, "job_id": job_id}
+
+
+@app.get("/api/img/{img_id}")
+def baixar_imagem(img_id: str):
+    """Entrega a foto do produto ao gerador de vídeo (link aleatório que expira em 1 h)."""
+    item = IMGS.get(img_id)
+    if not item or item[2] < time.time():
+        raise HTTPException(404, "imagem expirada")
+    from fastapi.responses import Response
+    return Response(item[0], media_type=item[1])
 
 
 @app.get("/api/status/{job_id}")
