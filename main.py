@@ -56,6 +56,7 @@ class GerarReq(BaseModel):
 class ComprimirReq(BaseModel):
     texto: str
     modo: str = "auto"      # auto | light | v24
+    tipo: str = ""          # imagem | video | codigo (vazio = detectar)
 
 
 def _set(job_id, **kw):
@@ -266,7 +267,7 @@ def testar(request: Request):
 def comprimir(req: ComprimirReq):
     if req.modo not in ("auto", "light", "v24"):
         raise HTTPException(400, "modo deve ser auto, light ou v24")
-    return ttokem.compress(req.texto, req.modo)
+    return ttokem.compress(req.texto, req.modo, req.tipo or None)
 
 
 def _limite(request) -> bool:
