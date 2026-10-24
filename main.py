@@ -110,7 +110,7 @@ def raiz():
     return {"ok": True, "app": "Ttoken Studio"}
 
 
-VERSAO = "1.10.0"
+VERSAO = "1.10.1"
 
 
 def _resumo():

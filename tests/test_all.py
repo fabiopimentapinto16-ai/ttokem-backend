@@ -534,6 +534,34 @@ class TestAgressivoEModelos(unittest.TestCase):
         self.assertEqual(got.get("status"), "pronto"); self.assertIn("no text", vistos[0][1]["content"])
 
 
+class TestConferenciaDeDados(unittest.TestCase):
+    def test_semantica_detecta_perda(self):
+        o = "Send the result to suporte@fal.ai with ID-a-1 and #999. Never promise delivery, or refund only."
+        self.assertTrue(ttokem.semantica(o, o)["intacta"])
+        self.assertFalse(ttokem.semantica(o, o.replace("suporte@fal.ai", "o suporte"))["intacta"])
+        self.assertFalse(ttokem.semantica(o, o.replace("Never ", ""))["intacta"])
+        self.assertFalse(ttokem.semantica(o, o.replace("Send", "Deliver"))["intacta"])
+
+    def test_compress_nunca_perde_email_url_id_e_negacao(self):
+        casos = [
+            "Escreva um e-mail para ana@example.com explicando que o pedido #48291 atrasou. Abra https://fal.ai/docs. Nunca prometer prazo de entrega.",
+            "Please create a user table and send the result to suporte@fal.ai with ID-a-1 and #999.",
+            "Gere image-to-video 9:16 com foto do produto usando o estilo dinâmico. Nunca inventar fatos e nunca apagar urls, e-mails ou ids.",
+            "Aja como agência de conteúdo viral. Crie um vídeo de 15 segundos inspirado em cachorro dançando. Entregue gancho forte nos 3 primeiros segundos e legenda pronta e hashtags.",
+        ]
+        for c in casos:
+            for modo in ("auto", "agressivo"):
+                r = ttokem.compress(c, modo, presets=True)
+                self.assertTrue(r["semantica"]["intacta"], (modo, c, r["text"], r["semantica"]))
+                self.assertTrue(ttokem.semantica(c, r["expandido"])["intacta"])
+
+    def test_agressivo_nao_apaga_ou_mas_se(self):
+        t = "Make a video of a dog or a cat, but only if the weather is sunny, no text."
+        r = ttokem.compress(t, "agressivo")
+        for k in ("or", "but", "only", "if", "no text"):
+            self.assertIn(k, r["text"])
+
+
 class TestTendenciasEPexels(Base):
     def setUp(self):
         super().setUp(); trending._CACHE.clear()

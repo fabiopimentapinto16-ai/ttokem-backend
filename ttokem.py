@@ -14,6 +14,7 @@ Modos:
 import math
 import re
 import string
+from collections import Counter
 
 MIN_SAVING = 0.02      # abaixo disso não compensa comprimir
 MIN_CHARS_V24 = 600    # codebook só compensa em textos longos
@@ -81,10 +82,10 @@ _LIVROS = {
         (r"so (?:that )?the face is bright, dimensional,? and clearly separated from the background",
          ", bright face, separated from background"),
         (r"add depth of field: render the background with natural, creamy optical blur so the subject pops",
-         "shallow depth of field, creamy bokeh"),
+         "add shallow depth of field, creamy bokeh"),
         (r"and clean up background clutter and distracting bright spots", "clean background"),
         (r"apply an? rich,? film-?like colou?r grade with deep clean blacks,? luminous highlights,? "
-         r"and vivid but natural colou?r", "film color grade, deep blacks, luminous highlights, natural vivid color"),
+         r"and vivid but natural colou?r", "film color grade, deep blacks, luminous highlights, vivid but natural color"),
         (r"(?:highly|ultra|extremely)[- ]detailed|high[- ]quality", "detailed"),
         (r"corpo inteiro e bem enquadrado", "corpo inteiro"),
     ],
@@ -134,6 +135,32 @@ _PT = re.compile(r"\b(?:de|que|com|para|uma|um|não|nao|sem|meu|minha|da|em|os)\
                  re.IGNORECASE)
 
 
+# ------------------------------------------------- conferência de dados (fail-closed)
+# Fatos = e-mails, URLs, #ids, e qualquer palavra com dígito ou "_" (123, ID-a-1, snake_case).
+_FACT = re.compile(r"https?://\S+|[\w.+-]+@[\w-]+\.[\w.]+|#\w+|\b\w*[\d_]\w*(?:[-.:/]\w+)*\b")
+# Lógica = palavras que invertem ou condicionam o sentido; a contagem não pode cair.
+_LOGIC = re.compile(r"\b(?:not|no|never|only|or|but|if|nunca|não|nao|apenas|somente|ou|mas|se|sem)\b",
+                    re.IGNORECASE)
+_VERBOS = re.compile(r"\b(?:create|generate|build|write|make|gere|crie|fa[cç]a|entregue|aja|"
+                     r"escreva|resuma|envie|send|add|remove|delete|update|explain|show|run|open|"
+                     r"abra|explique|mostre|adicione|remova|atualize)\b", re.IGNORECASE)
+
+
+def semantica(orig: str, out: str) -> dict:
+    """Mede se fatos, lógica e verbos de ação do original sobrevivem em `out`."""
+    fatos = {f.rstrip(".,;:)") for f in _FACT.findall(orig)}
+    f_ok = sum(1 for f in fatos if f in out)
+    lo = Counter(m.lower() for m in _LOGIC.findall(orig))
+    ln = Counter(m.lower() for m in _LOGIC.findall(out))
+    l_ok = sum(min(lo[k], ln[k]) for k in lo)
+    vo = {m.lower() for m in _VERBOS.findall(orig)}
+    vn = {m.lower() for m in _VERBOS.findall(out)}
+    v_ok = len(vo & vn)
+    return {"fatos": f"{f_ok}/{len(fatos)}", "logica": f"{l_ok}/{sum(lo.values())}",
+            "verbos": f"{v_ok}/{len(vo)}",
+            "intacta": f_ok == len(fatos) and l_ok == sum(lo.values()) and v_ok == len(vo)}
+
+
 def detectar_tipo(text: str):
     """'imagem' | 'video' | 'codigo' | None (pelo maior número de pistas)."""
     placar = {k: len(re.findall(rx, text, re.IGNORECASE)) for k, rx in _PISTAS.items()}
@@ -161,7 +188,7 @@ def aplicar_dicionario(text: str, tipo=None):
         return text, 0
     if len(_RESTRICAO.findall(out)) < len(_RESTRICAO.findall(text)):
         return text, 0
-    if any(c not in out for c in extract_critical(text)):
+    if any(c not in out for c in extract_critical(text)) or not semantica(text, out)["intacta"]:
         return text, 0
     return out, n
 
@@ -252,7 +279,7 @@ def aplicar_presets(text: str):
         return text, 0
     exp = expandir_presets(res)
     if len(_RESTRICAO.findall(exp)) < len(_RESTRICAO.findall(text)) or \
-            any(c not in exp for c in extract_critical(text)):
+            any(c not in exp for c in extract_critical(text)) or not semantica(text, exp)["intacta"]:
         return text, 0
     return res, n
 
@@ -277,7 +304,8 @@ def compress_agressivo(text: str, tipo=None):
         prox = toks[idx + 1].lower().strip(".,;:!?()\"") if idx + 1 < len(toks) else ""
         eh_crit = any(c in w for c in crit)
         antes_restricao = bool(_RESTRICAO.fullmatch(prox))      # "do" de "do not", "is" de "is only"
-        if (eh_crit or _RESTRICAO.fullmatch(nu) or antes_restricao or re.search(r"\d", w)
+        if (eh_crit or _RESTRICAO.fullmatch(nu) or _LOGIC.fullmatch(nu) or antes_restricao
+                or re.search(r"\d", w) or _VERBOS.fullmatch(nu) or _FACT.fullmatch(w.strip(".,;:)"))
                 or not (nu in _STOP or nu in _ENFEITE)):
             chave = nu
             if not eh_crit and chave in vistas and len(chave) > 3 and not re.search(r"\d", w):
@@ -287,7 +315,7 @@ def compress_agressivo(text: str, tipo=None):
     out = re.sub(r"\s+([,.;:])", r"\1", " ".join(palavras))
     out = re.sub(r"[,;]\s*(?=[,;])", "", out).strip(" ,;")
     if len(_RESTRICAO.findall(out)) < len(_RESTRICAO.findall(text)) or \
-            any(c not in out for c in crit):
+            any(c not in out for c in crit) or not semantica(text, out)["intacta"]:
         return base
     return out
 
@@ -416,7 +444,7 @@ def compress(text: str, mode: str = "auto", tipo=None, presets: bool = False) ->
               "compressed_tokens": orig, "saving_pct": 0.0, "lost": [],
               "critical": f"0/0", "decisions": "0/0", "formatted": None,
               "refusal": False, "tipo": None, "trocas": 0,
-              "expandido": text}
+              "expandido": text, "semantica": semantica(text, text)}
     if not text:
         return result
 
@@ -445,6 +473,9 @@ def compress(text: str, mode: str = "auto", tipo=None, presets: bool = False) ->
     for name, out, lost, stats in cands:
         if lost:                       # fail-closed: descarta candidato
             continue
+        if name != "v24" and not semantica(
+                text, expandir_presets(out) if name == "preset" else out)["intacta"]:
+            continue                   # perdeu fato, lógica ou verbo: não usa
         tok = est_tokens(out)
         if best is None or tok < best[2]:
             best = (name, out, tok, stats)
@@ -464,6 +495,7 @@ def compress(text: str, mode: str = "auto", tipo=None, presets: bool = False) ->
                   tipo=(tipo if tipo in _LIVROS else detectar_tipo(text)),
                   trocas=trocas if name == "light" else 0,
                   expandido=expandir_presets(out) if name == "preset" else out)
+    result["semantica"] = semantica(text, result["expandido"])
     if stats:
         n_crit, n_dec, ok_dec = stats
         result["critical"] = f"{n_crit}/{n_crit}"
