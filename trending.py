@@ -3,8 +3,10 @@
 - Sem busca: `chart=mostPopular` (custa 1 unidade da cota diária de 10.000).
 - Com busca: `search?order=viewCount` na última semana (custa ~101 unidades).
 Chave grátis: YOUTUBE_API_KEY (Google Cloud -> ativar "YouTube Data API v3" -> Credenciais).
-O Ttoken usa isso só para mostrar títulos/visualizações e sugerir IDEIAS ORIGINAIS.
+O Ttoken usa isso só para mostrar títulos/visualizações/likes e sugerir IDEIAS ORIGINAIS.
 Não baixa vídeos de terceiros.
+
+Ordenação: score = views + (likes * 40) -> prioriza engajamento real.
 """
 import os
 import time
@@ -42,8 +44,11 @@ def _item(v):
     sn, st = v.get("snippet", {}), v.get("statistics", {})
     vid = v["id"] if isinstance(v["id"], str) else v["id"].get("videoId", "")
     thumbs = sn.get("thumbnails", {})
+    views = int(st.get("viewCount", 0) or 0)
+    likes = int(st.get("likeCount", 0) or 0)      # canal pode esconder os likes (vira 0)
+    score = views + (likes * 40)
     return {"id": vid, "titulo": sn.get("title", ""), "canal": sn.get("channelTitle", ""),
-            "views": int(st.get("viewCount", 0) or 0), "likes": int(st.get("likeCount", 0) or 0),
+            "views": views, "likes": likes, "score": score,
             "url": f"https://www.youtube.com/watch?v={vid}",
             "thumb": (thumbs.get("medium") or thumbs.get("default") or {}).get("url", "")}
 
@@ -63,11 +68,14 @@ def mais_vistos(regiao="BR", q="", limite=15, chave=None):
         achados = _get("search", {"part": "snippet", "q": q, "type": "video",
                                   "order": "viewCount", "regionCode": regiao,
                                   "publishedAfter": desde, "maxResults": limite}, chave)
-        ids = ",".join(i["id"]["videoId"] for i in achados.get("items", []) if "videoId" in i.get("id", {}))
-        itens = _get("videos", {"part": "snippet,statistics", "id": ids}, chave).get("items", []) if ids else []
+        ids = ",".join(i["id"]["videoId"] for i in achados.get("items", [])
+                       if "videoId" in i.get("id", {}))
+        itens = _get("videos", {"part": "snippet,statistics", "id": ids},
+                     chave).get("items", []) if ids else []
     else:
         itens = _get("videos", {"part": "snippet,statistics", "chart": "mostPopular",
-                                "regionCode": regiao, "maxResults": limite}, chave).get("items", [])
-    out = sorted((_item(v) for v in itens), key=lambda x: -x["views"])
+                                "regionCode": regiao, "maxResults": limite},
+                     chave).get("items", [])
+    out = sorted((_item(v) for v in itens), key=lambda x: -x["score"])
     _CACHE[ck] = (time.time() + TTL, out)
     return out

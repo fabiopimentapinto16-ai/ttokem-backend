@@ -50,6 +50,7 @@ class GerarReq(BaseModel):
     tipo: str = "normal"           # "anuncio" = comercial de produto
     imagem_b64: str = Field(default="", max_length=6_000_000)   # foto do produto (opcional)
     sem_video: bool = False        # usuário já tem o vídeo: só gerar legenda
+    idioma: str = Field(default="Português do Brasil", max_length=60)   # qualquer idioma
 
 
 class ComprimirReq(BaseModel):
@@ -98,7 +99,8 @@ def _run(job_id, req: GerarReq, imagem_url=""):
         _set(job_id, **kw)
 
     pipeline.produzir(req.ideia, req.plataforma, llm, videos, report, req.regenerar,
-                      tipo=req.tipo, imagem_url=imagem_url, sem_video=req.sem_video)
+                      tipo=req.tipo, imagem_url=imagem_url, sem_video=req.sem_video,
+                      idioma=req.idioma)
 
 
 @app.get("/")
@@ -106,7 +108,7 @@ def raiz():
     return {"ok": True, "app": "Ttoken Studio"}
 
 
-VERSAO = "1.7.0"
+VERSAO = "1.8.0"
 
 
 def _resumo():
@@ -124,6 +126,7 @@ def health():
 class ChatReq(BaseModel):
     mensagem: str = Field(min_length=1, max_length=4000)
     historico: list = []
+    idioma: str = Field(default="", max_length=60)      # idioma da resposta (qualquer um)
 
 
 @app.post("/api/chat")
@@ -133,7 +136,9 @@ def chat(req: ChatReq, request: Request):
         raise HTTPException(429, "Limite de pedidos por hora atingido.")
     msgs = [{"role": "system", "content":
              "Você é o assistente do Ttoken Studio: roteiros, legendas, ideias de vídeo e "
-             "código (Python/Kivy). Responda em português, claro e prático."}]
+             "código (Python/Kivy). Responda em "
+             + (pipeline.limpar_idioma(req.idioma) if req.idioma.strip() else "português")
+             + ", claro e prático."}]
     for h in (req.historico or [])[-10:]:
         if isinstance(h, dict) and h.get("role") in ("user", "assistant") and h.get("content"):
             msgs.append({"role": h["role"], "content": str(h["content"])[:4000]})
