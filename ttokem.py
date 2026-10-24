@@ -15,7 +15,7 @@ import math
 import re
 import string
 
-MIN_SAVING = 0.10      # abaixo disso não compensa comprimir
+MIN_SAVING = 0.02      # abaixo disso não compensa comprimir
 MIN_CHARS_V24 = 600    # codebook só compensa em textos longos
 
 # ----------------------------------------------------------------- críticos
@@ -68,6 +68,103 @@ _FILLERS = [
     r"i would like to", r"could you", r"you know", r"in order to",
 ]
 _FILLER_RE = re.compile(r"\b(?:" + "|".join(_FILLERS) + r")\b[,]?\s*", re.IGNORECASE)
+
+# ------------------------------------------- dicionários por tipo (imagem/vídeo/código)
+# Trocam frases LONGAS e redundantes por equivalentes curtos em linguagem natural (o gerador
+# entende sem decodificar). Nunca apagam restrições: ver _RESTRICAO e _verifica_tipo.
+_LIVROS = {
+    "imagem": [
+        (r"dramatically improve this photo into an? polished,? professional[- ]quality portrait",
+         "professional portrait"),
+        (r"re-?light the subject with (?:flattering )?soft directional key light(?: and gentle fill)?",
+         "soft key light"),
+        (r"so (?:that )?the face is bright, dimensional,? and clearly separated from the background",
+         ", bright face, separated from background"),
+        (r"add depth of field: render the background with natural, creamy optical blur so the subject pops",
+         "shallow depth of field, creamy bokeh"),
+        (r"and clean up background clutter and distracting bright spots", "clean background"),
+        (r"apply an? rich,? film-?like colou?r grade with deep clean blacks,? luminous highlights,? "
+         r"and vivid but natural colou?r", "film color grade, deep blacks, luminous highlights, natural vivid color"),
+        (r"(?:highly|ultra|extremely)[- ]detailed|high[- ]quality", "detailed"),
+        (r"corpo inteiro e bem enquadrado", "corpo inteiro"),
+    ],
+    "video": [
+        (r"the camera (?:pans|moves|slides) smoothly (?:to the )?right", "pan right"),
+        (r"the camera (?:pans|moves|slides) smoothly (?:to the )?left", "pan left"),
+        (r"(?:the )?(?:subject|she|he|they) walks? (?:slowly )?(?:towards?|to) the camera",
+         "walks toward camera"),
+        (r"the camera (?:slowly )?(?:pushes|dollies|moves) in(?: toward| towards)?",
+         "dolly-in toward"),
+        (r"smooth camera orbit around", "orbit around"),
+        (r"the camera tracks? backwards?", "tracking back"),
+        (r"(?:with )?volumetric lighting (?:through|in) the (mist|fog|smoke)", r"volumetric light, \1"),
+        (r"(?:a )?duration (?:of )?(\d+) seconds", r"\1 seconds"),
+        (r"cinematic lighting", "cinematic light"),
+    ],
+    "codigo": [
+        (r"make sure (?:that )?", "ensure "),
+        (r"(?:i want|i need|i would like) you to ", ""),
+        (r"quero que voc[eê] ", ""),
+        (r"preciso que voc[eê] ", ""),
+        (r"(?:that|which) (?:runs|run) in (?:a )?background thread", "in a background thread"),
+        (r"(?:the )?github actions workflow", "GitHub Actions workflow"),
+        (r"(?:write|create|build) (?:me )?an? (?:complete |full )?(?:python )?script (?:that|which|to) ",
+         "script to "),
+    ],
+}
+_LIVROS = {k: [(re.compile(a, re.IGNORECASE), b) for a, b in v] for k, v in _LIVROS.items()}
+
+_PISTAS = {
+    "codigo": r"\b(?:python|kivy|fastapi|apk|buildozer|endpoint|workflow|script|c[oó]digo|"
+              r"fun[cç][aã]o|refator|json|http|thread|api)\b",
+    "video": r"\b(?:v[ií]deo|video|c[aâ]mera|camera|pans?|dolly|drone|seconds|segundos|fps|"
+             r"tiktok|reels|shorts|animate|anima[cç][aã]o|time-?lapse)\b",
+    "imagem": r"\b(?:photo|foto|portrait|retrato|lighting|bokeh|image|imagem|logo|"
+              r"depth of field|film[- ]like|color grade)\b",
+}
+
+# palavras que carregam RESTRIÇÃO: a contagem delas não pode diminuir depois da troca
+_RESTRICAO = re.compile(
+    r"\b(?:preserve|preserving|keep|keeping|same|exact|exactly|identical|only|never|without|"
+    r"no|not|don't|do not|mantenha|manter|mesmo|mesma|exatamente|apenas|somente|sem|"
+    r"n[aã]o|nunca)\b", re.IGNORECASE)
+
+
+_PT = re.compile(r"\b(?:de|que|com|para|uma|um|não|nao|sem|meu|minha|da|em|os)\b",
+                 re.IGNORECASE)
+
+
+def detectar_tipo(text: str):
+    """'imagem' | 'video' | 'codigo' | None (pelo maior número de pistas)."""
+    placar = {k: len(re.findall(rx, text, re.IGNORECASE)) for k, rx in _PISTAS.items()}
+    k = max(placar, key=placar.get)
+    return k if placar[k] >= 1 else None
+
+
+def aplicar_dicionario(text: str, tipo=None):
+    """Troca frases longas pelas curtas do tipo. Retorna (texto, nº de trocas).
+    Fail-closed: se qualquer crítico ou restrição sumir, devolve o texto original."""
+    tipo = tipo if tipo in _LIVROS else detectar_tipo(text)
+    if not tipo:
+        return text, 0
+    out, n = text, 0
+    for rx, novo in _LIVROS[tipo]:
+        out, k = rx.subn(novo, out)
+        n += k
+    # Geradores de imagem/vídeo (CLIP/T5) entendem prompt sem artigos: tira "the/a/an",
+    # só em INGLÊS (em português o "a" é preposição) e nunca em código.
+    if tipo in ("imagem", "video") and not _PT.search(out):
+        out, k = re.subn(r"\b(?:the|an?)\s+", "", out, flags=re.IGNORECASE)
+        n += k
+    out = re.sub(r"\s+([,.;:])", r"\1", re.sub(r"[ \t]{2,}", " ", out))
+    if n == 0:
+        return text, 0
+    if len(_RESTRICAO.findall(out)) < len(_RESTRICAO.findall(text)):
+        return text, 0
+    if any(c not in out for c in extract_critical(text)):
+        return text, 0
+    return out, n
+
 
 _ALPHABET = string.digits + string.ascii_uppercase + string.ascii_lowercase
 
@@ -182,23 +279,30 @@ def _verify(body, crit, ids, decisions, nucleus_d):
 _DECODE_HINT = "(decodifique §ID pelo CODEBOOK)\n"
 
 
-def compress(text: str, mode: str = "auto") -> dict:
-    """Devolve dict com `text` (o que mandar à IA) e métricas."""
+def compress(text: str, mode: str = "auto", tipo=None) -> dict:
+    """Devolve dict com `text` (o que mandar à IA) e métricas.
+    `tipo`: 'imagem' | 'video' | 'codigo' (ou None = detectar) escolhe o dicionário."""
     text = (text or "").strip()
     orig = est_tokens(text)
     result = {"mode": "passthrough", "text": text, "original_tokens": orig,
               "compressed_tokens": orig, "saving_pct": 0.0, "lost": [],
               "critical": f"0/0", "decisions": "0/0", "formatted": None,
-              "refusal": False}
+              "refusal": False, "tipo": None, "trocas": 0}
     if not text:
         return result
 
     cands = []
+    trocas = 0
     if mode in ("light", "auto"):
-        cands.append(("light", compress_light(text), [], None))
+        leve, trocas = aplicar_dicionario(compress_light(text), tipo)
+        cands.append(("light", leve, [], None))
     if mode == "v24" or (mode == "auto" and len(text) >= MIN_CHARS_V24):
         body, crit, ids, dec, nd = _build_v24(text)
         lost, ok_dec = _verify(body, crit, ids, dec, nd)
+        # Em AUTO o v24 só vale para texto de ocorrência/ticket (tem críticos E decisões).
+        # Sem eles o núcleo fica vazio: "economizaria" apagando o pedido inteiro.
+        if mode == "auto" and (not crit or not dec):
+            lost = lost + ["v24 sem críticos/decisões: apagaria o conteúdo"]
         cands.append(("v24", _DECODE_HINT + body, lost,
                       (len(crit), len(dec), ok_dec)))
 
@@ -221,7 +325,9 @@ def compress(text: str, mode: str = "auto") -> dict:
     if mode == "auto" and saving < MIN_SAVING:
         return result
     result.update(mode=name, text=out, compressed_tokens=tok,
-                  saving_pct=round(saving * 100, 1))
+                  saving_pct=round(saving * 100, 1),
+                  tipo=(tipo if tipo in _LIVROS else detectar_tipo(text)),
+                  trocas=trocas if name == "light" else 0)
     if stats:
         n_crit, n_dec, ok_dec = stats
         result["critical"] = f"{n_crit}/{n_crit}"

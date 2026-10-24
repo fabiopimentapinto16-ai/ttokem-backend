@@ -456,6 +456,45 @@ class TestDescoberta(Base):
         self.assertEqual(m.slots()[0]["model"], "meu/modelo")
 
 
+class TestDicionariosPorTipo(unittest.TestCase):
+    FOTO = ("Dramatically improve this photo into a polished, professional-quality portrait while keeping the same person, same pose, same clothing, and same location. Re-light the subject with flattering soft directional key light and gentle fill so the face is bright, dimensional, and clearly separated from the background — eliminate flat, dull, or overhead lighting. Add depth of field: render the background with natural, creamy optical blur so the subject pops, and clean up background clutter and distracting bright spots. Apply a rich, film-like color grade with deep clean blacks, luminous highlights, and vivid but natural color. Critical constraints: preserve the person's exact same face, eyes, skin and appearance.")
+
+    def test_tipo_detectado(self):
+        self.assertEqual(ttokem.detectar_tipo(self.FOTO), "imagem")
+        self.assertEqual(ttokem.detectar_tipo("camera pans smoothly to the right, 5 seconds, tiktok"), "video")
+        self.assertEqual(ttokem.detectar_tipo("write a fastapi endpoint and a python script"), "codigo")
+        self.assertIsNone(ttokem.detectar_tipo("ola tudo bem"))
+
+    def test_foto_comprime_e_preserva_restricoes(self):
+        r = ttokem.compress(self.FOTO, "auto")
+        self.assertEqual(r["mode"], "light"); self.assertEqual(r["tipo"], "imagem")
+        self.assertGreater(r["saving_pct"], 25)
+        for k in ("preserve person's exact same face", "same pose", "same clothing", "same location"):
+            self.assertIn(k, r["text"])          # restrições críticas continuam, em palavras
+
+    def test_v24_nao_apaga_pedido_criativo(self):
+        # antes: núcleo vazio "C:" (92% de "economia" apagando tudo)
+        r = ttokem.compress(self.FOTO, "auto")
+        self.assertNotIn("[NÚCLEO]", r["text"]); self.assertGreater(len(r["text"]), 200)
+
+    def test_texto_sem_frase_do_dicionario_passa_direto(self):
+        t = "Perfume em marmore preto, luz suave de contorno, sem texto, 9:16, 5 seconds."
+        r = ttokem.compress(t, "auto")
+        self.assertEqual(r["text"], t); self.assertEqual(r["saving_pct"], 0.0)
+
+    def test_restricao_que_sumiria_cancela_a_troca(self):
+        out, n = ttokem.aplicar_dicionario("make sure not to touch the logo", "codigo")
+        self.assertIn("not", out)
+        out, n = ttokem.aplicar_dicionario("the camera pans smoothly right, no watermark, 6 seconds", "video")
+        self.assertIn("no watermark", out); self.assertIn("6 seconds", out)
+
+    def test_codigo_mantem_nomes_tecnicos(self):
+        t = "I want you to make sure that the buildozer.spec file includes the requests library and that the workflow runs on ubuntu-22.04 with API level 33."
+        r = ttokem.compress(t, "auto")
+        for k in ("buildozer.spec", "requests", "ubuntu-22.04", "33"):
+            self.assertIn(k, r["text"])
+
+
 class TestTendenciasEPexels(Base):
     def setUp(self):
         super().setUp(); trending._CACHE.clear()
