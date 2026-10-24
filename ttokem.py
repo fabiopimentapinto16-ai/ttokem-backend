@@ -166,6 +166,132 @@ def aplicar_dicionario(text: str, tipo=None):
     return out, n
 
 
+# ------------------------------------------------------------------ modelos prontos
+# Frases-padrão que você repete viram uma referência curta (@id.n ou @id). A referência é
+# expandida de volta ANTES do gerador, então nada se perde. Só casa com frases quase iguais
+# (>= 80% das palavras), e a troca é cancelada se uma restrição ou crítico sumir.
+PRESETS = {
+    "foto_pro": {"tipo": "imagem", "frases": [
+        "Dramatically improve this photo into a polished, professional-quality portrait while keeping the same person, same pose, same clothing, and same location.",
+        "Re-light the subject with flattering soft directional key light and gentle fill so the face is bright, dimensional, and clearly separated from the background — eliminate flat, dull, or overhead lighting.",
+        "Add depth of field: render the background with natural, creamy optical blur so the subject pops, and clean up background clutter and distracting bright spots.",
+        "Apply a rich, film-like color grade with deep clean blacks, luminous highlights, and vivid but natural color.",
+        "Critical constraints: preserve the person's exact same face, eyes, skin and appearance."]},
+    "produto_cinema": {"tipo": "video", "frases": [
+        "Create a cinematic commercial product shot with the product as the hero, centered, on a dark reflective surface.",
+        "Soft rim light, shallow depth of field, slow dolly-in toward the product, subtle golden particles floating in the air, glossy reflections.",
+        "Keep the product label, colors and logo exactly identical to the reference, no text overlay, no watermark.",
+        "Vertical 9:16, smooth motion, 5 seconds."]},
+    "retrato_corporativo": {"tipo": "imagem", "frases": [
+        "Professional corporate portrait with a softly blurred light gray background, gentle side lighting and natural color.",
+        "Keep exactly the same face, clothing and pose as the original photo, do not alter the face shape or the eyes, keep natural skin texture without over-smoothing."]},
+    "app_kivy_apk": {"tipo": "codigo", "frases": [
+        "Write a Python Kivy app that builds into an Android APK with buildozer, and a GitHub Actions workflow on ubuntu-22.04 that uploads the APK as an artifact.",
+        "Run network calls in a background thread and update the UI only through Clock.schedule_once.",
+        "Do not remove any existing feature, keep the existing tabs unchanged, and show only the final code."]},
+}
+_PRESET_LIM = 0.80
+
+
+def _palavras(t: str):
+    return set(re.findall(r"[\w'-]+", t.lower()))
+
+
+def _sim(a: str, b: str) -> float:
+    A, B = _palavras(a), _palavras(b)
+    return len(A & B) / len(A | B) if A and B else 0.0
+
+
+def expandir_presets(text: str) -> str:
+    """@id -> preset inteiro; @id.n -> frase n (1..). Referência desconhecida fica como está."""
+    def troca(m):
+        pre = PRESETS.get(m.group(1))
+        if not pre:
+            return m.group(0)
+        if m.group(2):
+            i = int(m.group(2)) - 1
+            return pre["frases"][i] if 0 <= i < len(pre["frases"]) else m.group(0)
+        return " ".join(pre["frases"])
+    return re.sub(r"@([a-z_]+)(?:\.(\d+))?", troca, text)
+
+
+def aplicar_presets(text: str):
+    """Troca frases quase idênticas às dos modelos por referências. Retorna (texto, nº)."""
+    sents = _sentences(text)
+    out, n, usados = [], 0, {}
+    for sn in sents:
+        ref = None
+        for pid, pre in PRESETS.items():
+            for k, fr in enumerate(pre["frases"], 1):
+                if _sim(sn, fr) >= _PRESET_LIM:
+                    ref = (pid, k)
+                    break
+            if ref:
+                break
+        if ref:
+            out.append(ref)
+            usados.setdefault(ref[0], []).append(ref[1])
+            n += 1
+        else:
+            out.append(sn)
+    final, i = [], 0
+    while i < len(out):
+        it = out[i]
+        if isinstance(it, tuple):
+            pid = it[0]
+            seq = []
+            while i < len(out) and isinstance(out[i], tuple) and out[i][0] == pid:
+                seq.append(out[i][1]); i += 1
+            total = len(PRESETS[pid]["frases"])
+            final.append(f"@{pid}" if seq == list(range(1, total + 1))
+                         else " ".join(f"@{pid}.{k}" for k in seq))
+        else:
+            final.append(it); i += 1
+    res = " ".join(final)
+    if n == 0:
+        return text, 0
+    exp = expandir_presets(res)
+    if len(_RESTRICAO.findall(exp)) < len(_RESTRICAO.findall(text)) or \
+            any(c not in exp for c in extract_critical(text)):
+        return text, 0
+    return res, n
+
+
+# ------------------------------------------------------------------ modo agressivo
+# Telegráfico: tira palavras de ligação e adjetivos de enfeite; NUNCA tira restrições,
+# números, unidades, nomes e termos técnicos. Cancela tudo se algo crítico sumir.
+_ENFEITE = set("""very really extremely highly truly quite rather slightly gently subtly softly
+flattering beautiful stunning amazing gorgeous polished natural naturally clearly distracting
+overall simply just entire whole nice good great perfect perfectly smoothly smooth lovely
+muito bem lindo linda incrivel incrível perfeito perfeita""".split())
+
+
+def compress_agressivo(text: str, tipo=None):
+    base = compress_light(text)
+    base, _ = aplicar_dicionario(base, tipo)
+    crit = set(extract_critical(text))
+    palavras, vistas = [], set()
+    toks = [w for w in re.split(r"(\s+)", base) if w and not w.isspace()]
+    for idx, w in enumerate(toks):
+        nu = w.lower().strip(".,;:!?()\"")
+        prox = toks[idx + 1].lower().strip(".,;:!?()\"") if idx + 1 < len(toks) else ""
+        eh_crit = any(c in w for c in crit)
+        antes_restricao = bool(_RESTRICAO.fullmatch(prox))      # "do" de "do not", "is" de "is only"
+        if (eh_crit or _RESTRICAO.fullmatch(nu) or antes_restricao or re.search(r"\d", w)
+                or not (nu in _STOP or nu in _ENFEITE)):
+            chave = nu
+            if not eh_crit and chave in vistas and len(chave) > 3 and not re.search(r"\d", w):
+                continue                                   # palavra repetida
+            vistas.add(chave)
+            palavras.append(w.rstrip(".;"))
+    out = re.sub(r"\s+([,.;:])", r"\1", " ".join(palavras))
+    out = re.sub(r"[,;]\s*(?=[,;])", "", out).strip(" ,;")
+    if len(_RESTRICAO.findall(out)) < len(_RESTRICAO.findall(text)) or \
+            any(c not in out for c in crit):
+        return base
+    return out
+
+
 _ALPHABET = string.digits + string.ascii_uppercase + string.ascii_lowercase
 
 
@@ -279,21 +405,30 @@ def _verify(body, crit, ids, decisions, nucleus_d):
 _DECODE_HINT = "(decodifique §ID pelo CODEBOOK)\n"
 
 
-def compress(text: str, mode: str = "auto", tipo=None) -> dict:
+def compress(text: str, mode: str = "auto", tipo=None, presets: bool = False) -> dict:
     """Devolve dict com `text` (o que mandar à IA) e métricas.
-    `tipo`: 'imagem' | 'video' | 'codigo' (ou None = detectar) escolhe o dicionário."""
+    `tipo`: 'imagem' | 'video' | 'codigo' (ou None = detectar) escolhe o dicionário.
+    `presets=True` permite referências @id (quem recebe precisa chamar expandir_presets;
+    o campo `expandido` já vem pronto). Modos: auto | light | v24 | agressivo."""
     text = (text or "").strip()
     orig = est_tokens(text)
     result = {"mode": "passthrough", "text": text, "original_tokens": orig,
               "compressed_tokens": orig, "saving_pct": 0.0, "lost": [],
               "critical": f"0/0", "decisions": "0/0", "formatted": None,
-              "refusal": False, "tipo": None, "trocas": 0}
+              "refusal": False, "tipo": None, "trocas": 0,
+              "expandido": text}
     if not text:
         return result
 
     cands = []
     trocas = 0
-    if mode in ("light", "auto"):
+    if presets and mode in ("agressivo", "auto"):
+        pre, npre = aplicar_presets(text)
+        if npre:                       # texto com referências @id (expandir antes de usar)
+            cands.append(("preset", pre, [], None))
+    if mode == "agressivo":
+        cands.append(("agressivo", compress_agressivo(text, tipo), [], None))
+    if mode in ("light", "auto", "agressivo"):
         leve, trocas = aplicar_dicionario(compress_light(text), tipo)
         cands.append(("light", leve, [], None))
     if mode == "v24" or (mode == "auto" and len(text) >= MIN_CHARS_V24):
@@ -322,12 +457,13 @@ def compress(text: str, mode: str = "auto", tipo=None) -> dict:
 
     name, out, tok, stats = best
     saving = 1 - tok / orig if orig else 0.0
-    if mode == "auto" and saving < MIN_SAVING:
+    if mode in ("auto", "agressivo") and saving < MIN_SAVING:
         return result
     result.update(mode=name, text=out, compressed_tokens=tok,
                   saving_pct=round(saving * 100, 1),
                   tipo=(tipo if tipo in _LIVROS else detectar_tipo(text)),
-                  trocas=trocas if name == "light" else 0)
+                  trocas=trocas if name == "light" else 0,
+                  expandido=expandir_presets(out) if name == "preset" else out)
     if stats:
         n_crit, n_dec, ok_dec = stats
         result["critical"] = f"{n_crit}/{n_crit}"

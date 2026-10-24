@@ -51,11 +51,12 @@ class GerarReq(BaseModel):
     imagem_b64: str = Field(default="", max_length=6_000_000)   # foto do produto (opcional)
     sem_video: bool = False        # usuário já tem o vídeo: só gerar legenda
     idioma: str = Field(default="Português do Brasil", max_length=60)   # qualquer idioma
+    economia: str = "auto"         # auto (segura) | agressivo (telegráfico, economiza mais)
 
 
 class ComprimirReq(BaseModel):
     texto: str
-    modo: str = "auto"      # auto | light | v24
+    modo: str = "auto"      # auto | light | v24 | agressivo
     tipo: str = ""          # imagem | video | codigo (vazio = detectar)
 
 
@@ -101,7 +102,7 @@ def _run(job_id, req: GerarReq, imagem_url=""):
 
     pipeline.produzir(req.ideia, req.plataforma, llm, videos, report, req.regenerar,
                       tipo=req.tipo, imagem_url=imagem_url, sem_video=req.sem_video,
-                      idioma=req.idioma)
+                      idioma=req.idioma, modo_ttokem=req.economia)
 
 
 @app.get("/")
@@ -109,7 +110,7 @@ def raiz():
     return {"ok": True, "app": "Ttoken Studio"}
 
 
-VERSAO = "1.9.0"
+VERSAO = "1.10.0"
 
 
 def _resumo():
@@ -265,9 +266,9 @@ def testar(request: Request):
 
 @app.post("/api/comprimir")
 def comprimir(req: ComprimirReq):
-    if req.modo not in ("auto", "light", "v24"):
-        raise HTTPException(400, "modo deve ser auto, light ou v24")
-    return ttokem.compress(req.texto, req.modo, req.tipo or None)
+    if req.modo not in ("auto", "light", "v24", "agressivo"):
+        raise HTTPException(400, "modo deve ser auto, light, v24 ou agressivo")
+    return ttokem.compress(req.texto, req.modo, req.tipo or None, presets=True)
 
 
 def _limite(request) -> bool:

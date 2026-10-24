@@ -56,12 +56,13 @@ def parse_json(text: str):
 
 
 def produzir(ideia, plataforma, llm, videos, report, regenerar=False,
-             tipo="normal", imagem_url="", sem_video=False, idioma=IDIOMA_PADRAO):
+             tipo="normal", imagem_url="", sem_video=False, idioma=IDIOMA_PADRAO,
+             modo_ttokem="auto"):
     """Roda o fluxo todo. `report(**campos)` recebe o progresso e o resultado.
     Sempre termina com report(status="pronto") ou report(status="erro")."""
     try:
         # 1) Ttokem: só comprime se realmente economiza (ideias curtas passam direto)
-        comp = ttokem.compress(ideia, "auto")
+        comp = ttokem.compress(ideia, "agressivo" if modo_ttokem == "agressivo" else "auto")
         report(etapa="IA escrevendo roteiro e legenda", passo=1,
                tokens={"antes": comp["original_tokens"],
                        "depois": comp["compressed_tokens"],

@@ -495,6 +495,45 @@ class TestDicionariosPorTipo(unittest.TestCase):
             self.assertIn(k, r["text"])
 
 
+class TestAgressivoEModelos(unittest.TestCase):
+    FOTO = TestDicionariosPorTipo.FOTO
+
+    def test_modelo_reconhece_prompt_padrao_e_expande_igual(self):
+        r = ttokem.compress(self.FOTO, "agressivo", presets=True)
+        self.assertEqual(r["mode"], "preset"); self.assertEqual(r["text"], "@foto_pro")
+        self.assertGreater(r["saving_pct"], 90)
+        for k in ("same pose", "exact same face", "eyes, skin"):
+            self.assertIn(k, r["expandido"])        # o gerador recebe tudo, por extenso
+
+    def test_modelo_nao_dispara_em_texto_diferente(self):
+        t = "Make a funny cat video with a dancing banana, 10 seconds, no text."
+        out, n = ttokem.aplicar_presets(t); self.assertEqual(n, 0); self.assertEqual(out, t)
+
+    def test_expandir_referencias(self):
+        self.assertIn("Clock.schedule_once", ttokem.expandir_presets("@app_kivy_apk.2"))
+        self.assertEqual(ttokem.expandir_presets("@nao_existe"), "@nao_existe")
+
+    def test_agressivo_mantem_restricoes_e_numeros(self):
+        t = ("Close-up beauty shot of a model applying red lipstick, with a very soft ring light "
+             "reflection in the eyes, glossy lips. Do not change the lip color shade (#B3122A). "
+             "Duration 5 seconds, vertical, no watermark.")
+        r = ttokem.compress(t, "agressivo")
+        for k in ("#B3122A", "not change", "5 seconds", "no watermark"):
+            self.assertIn(k, r["text"])
+        self.assertGreater(r["saving_pct"], 10)
+
+    def test_pipeline_aceita_modo_agressivo(self):
+        import pipeline
+        vistos = []
+        class L:
+            def chat(self, msgs, **kw): vistos.append(msgs); return '{"titulo":"t","legenda":"l","hashtags":[],"prompt_video":"a cinematic scene"}', "fake"
+        got = {}
+        pipeline.LLM_CACHE.clear()
+        pipeline.produzir("a very beautiful golden retriever puppy running on the green lawn, no text", "tiktok", L(), None,
+                          lambda **k: got.update(k), sem_video=True, modo_ttokem="agressivo")
+        self.assertEqual(got.get("status"), "pronto"); self.assertIn("no text", vistos[0][1]["content"])
+
+
 class TestTendenciasEPexels(Base):
     def setUp(self):
         super().setUp(); trending._CACHE.clear()
