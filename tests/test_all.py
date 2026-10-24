@@ -562,6 +562,59 @@ class TestConferenciaDeDados(unittest.TestCase):
             self.assertIn(k, r["text"])
 
 
+class TestRuaNeuralV2(unittest.TestCase):
+    def setUp(self):
+        import rua_neural
+        self.rn = rua_neural
+        self.B = rua_neural.Biblioteca()
+
+    def test_arvore_e_heranca(self):
+        no = self.B.modelos["foto_pro"]
+        self.assertEqual([n.nivel for n in (no.pai.pai.pai, no.pai.pai, no.pai, no)], ["ROOT", "CONTEXT", "TASK", "MODEL"])
+        self.assertGreaterEqual(len(no.regras_herdadas()), len(self.rn.REGRAS["ROOT"]) + len(self.rn.REGRAS["imagem"]))
+
+    def test_prompt_igual_vira_referencia_e_expande_identico(self):
+        f = " ".join(ttokem.PRESETS["foto_pro"]["frases"])
+        ref, n, tipo = self.B.selecionar(f)
+        self.assertEqual((ref, tipo), ("@foto_pro", "imagem")); self.assertEqual(ttokem.expandir_presets(ref), f)
+
+    def test_uma_palavra_diferente_nao_troca(self):
+        f = " ".join(ttokem.PRESETS["foto_pro"]["frases"]).replace("soft", "hard", 1)
+        ref, n, _ = self.B.selecionar(f)
+        self.assertIn("hard", ref)                      # a frase alterada fica como o usuário escreveu
+        self.assertEqual(ttokem.expandir_presets(ref), f)   # nada some e nada é inventado
+
+    def test_palavra_removida_ou_numero_diferente_nao_troca(self):
+        f = " ".join(ttokem.PRESETS["produto_cinema"]["frases"])
+        for alterado in (f.replace("no text overlay, ", ""), f.replace("5 seconds", "8 seconds")):
+            ref, n, _ = self.B.selecionar(alterado)
+            self.assertEqual(ttokem.expandir_presets(ref), alterado)
+            self.assertNotEqual(ref, "@produto_cinema")      # o modelo inteiro NÃO substitui um texto diferente
+
+    def test_sem_tipo_claro_nao_troca_nada(self):
+        self.assertEqual(self.B.selecionar("ola tudo bem")[1], 0)
+
+    def test_regra_herdada_cancela_se_dado_sumiria(self):
+        no = self.B.modelos["produto_cinema"]
+        self.assertFalse(self.B.conferir(no, "vertical 9:16, 5 seconds, no watermark", "vertical, smooth")[0])
+        self.assertTrue(self.B.conferir(no, "vertical 9:16, 5 seconds, no watermark", "9:16, 5 seconds, no watermark")[0])
+
+    def test_json_exporta_e_carrega(self):
+        import tempfile, os
+        d = tempfile.mkdtemp(); p = os.path.join(d, "b.json"); open(p, "w", encoding="utf-8").write(self.B.exportar())
+        B2 = self.rn.Biblioteca.carregar(p)
+        self.assertEqual(set(B2.modelos), set(self.B.modelos))
+        self.assertEqual(B2.modelos["app_kivy_apk"].frases, self.B.modelos["app_kivy_apk"].frases)
+
+    def test_backtest_v2_sem_perda_silenciosa(self):
+        import importlib.util, os
+        sp = importlib.util.spec_from_file_location("bt", os.path.join(os.path.dirname(os.path.abspath(__file__)), "backtest_rua_neural.py"))
+        bt = importlib.util.module_from_spec(sp); sp.loader.exec_module(bt)
+        r = bt.rodar(imprimir=False)["v2 Rua Neural (95%)"]
+        self.assertEqual((r["perdas"], r["inventadas"]), (0, 0))
+        self.assertGreater(r["trocados"], 0)
+
+
 class TestTendenciasEPexels(Base):
     def setUp(self):
         super().setUp(); trending._CACHE.clear()

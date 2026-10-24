@@ -242,15 +242,24 @@ def expandir_presets(text: str) -> str:
     return re.sub(r"@([a-z_]+)(?:\.(\d+))?", troca, text)
 
 
-def aplicar_presets(text: str):
-    """Troca frases quase idênticas às dos modelos por referências. Retorna (texto, nº)."""
+def aplicar_presets(text: str, tipo=None):
+    """Troca frases idênticas às dos modelos por referências (Rua Neural v2: árvore com
+    herança de restrições e limite de 95%). Retorna (texto, nº de frases trocadas)."""
+    import rua_neural
+    res, n, _ = rua_neural.BIBLIOTECA.selecionar(text, tipo)
+    return res, n
+
+
+def _aplicar_presets_v1(text: str, limite: float = None):
+    """Versão antiga (limite de 80%, sem árvore): mantida só para comparar no backtest."""
+    _lim = limite if limite is not None else _PRESET_LIM
     sents = _sentences(text)
     out, n, usados = [], 0, {}
     for sn in sents:
         ref = None
         for pid, pre in PRESETS.items():
             for k, fr in enumerate(pre["frases"], 1):
-                if _sim(sn, fr) >= _PRESET_LIM:
+                if _sim(sn, fr) >= _lim:
                     ref = (pid, k)
                     break
             if ref:
