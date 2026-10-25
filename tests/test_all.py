@@ -837,7 +837,7 @@ class TestPaginaPainel(unittest.TestCase):
                 for d in n.decorator_list:
                     if isinstance(d, ast.Call) and d.args and isinstance(d.args[0], ast.Constant):
                         rotas.add(d.args[0].value)
-        for r in ("/painel", "/api/painel", "/api/comandos"):
+        for r in ("/painel", "/sistema", "/api/painel", "/api/comandos"):
             self.assertIn(r, rotas)
 
     def test_html_valido_e_equilibrado(self):
@@ -882,3 +882,31 @@ class TestNHHC4F(unittest.TestCase):
         self.assertTrue(ttokem.semantica(p, o)["intacta"])
         self.assertIn("not", o.lower())
         self.assertIn("only", o.lower())
+
+
+class TestSistemaEBeam(unittest.TestCase):
+    def test_pagina_sistema_valida(self):
+        import painel
+        from html.parser import HTMLParser
+        pilha, erros = [], []
+        class P(HTMLParser):
+            def handle_starttag(s, t, a):
+                if t not in ("meta", "br", "input", "link"): pilha.append(t)
+            def handle_endtag(s, t):
+                if not pilha or pilha.pop() != t: erros.append(t)
+        P().feed(painel.SISTEMA)
+        self.assertEqual((erros, pilha), ([], []))
+        self.assertIn("/health", painel.SISTEMA)
+
+    def test_beam_so_entra_com_chave(self):
+        for k in list(os.environ):
+            if k.startswith("REFLECTION"):
+                del os.environ[k]
+        self.assertNotIn("reflection", {s["name"] for s in maestro.Maestro().slots()})
+        os.environ["REFLECTION_API_KEY"] = "k"
+        try:
+            s = [x for x in maestro.Maestro().slots() if x["name"] == "reflection"]
+            self.assertEqual(s[0]["model"], "Beam-1.0-501B-A23B")
+            self.assertTrue(s[0]["base"].startswith("https://api.reflection.ai/"))
+        finally:
+            del os.environ["REFLECTION_API_KEY"]

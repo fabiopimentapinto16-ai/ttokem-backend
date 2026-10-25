@@ -51,7 +51,7 @@ h1{font-size:20px;letter-spacing:2px;color:var(--pr);margin:6px 0 16px}
 button{padding:12px 14px;border:0;border-radius:8px;font-weight:700;cursor:pointer;background:var(--pr);color:#000;margin:8px 8px 0 0}
 button.s{background:var(--se);color:#fff}button:disabled{opacity:.5}label{color:var(--mu);font-size:13px}
 pre{white-space:pre-wrap;word-wrap:break-word;font:13px/1.6 monospace;color:#ccd}a{color:var(--pr)}.ok{color:var(--pr)}.no{color:#ff4d6d}
-</style></head><body><h1>TTOKEM OS // PAINEL</h1>
+</style></head><body><h1>TTOKEM OS // PAINEL <a href="/sistema" style="font-size:13px;letter-spacing:0">sobre o sistema</a></h1>
 <div class="g"><div class="c" style="grid-column:1/-1"><div class="l">Escreva normal: o comando é escolhido sozinho</div>
 <textarea id="p" placeholder="Ex: eu quero com eficiência esse código de login em Kivy"></textarea>
 <label><input type="checkbox" id="ag"> modo agressivo (economiza mais; dados continuam auditados)</label><br>
@@ -84,4 +84,49 @@ for(let i=0;i<120;i++){await new Promise(s=>setTimeout(s,5000));const s=await (a
 $('vd').textContent=(s.etapa||s.status);if(s.status==='pronto'){$('vd').innerHTML=s.video_url?'<a href="'+s.video_url+'">Abrir vídeo</a>':'pronto (só legenda)';
 if(s.texto)$('o').textContent=s.texto;break}if(s.status==='erro'){$('vd').textContent='Erro: '+(s.erro||'');break}}
 }catch(e){$('vd').textContent='Erro: '+e.message}finally{$('v').disabled=false}}
+</script></body></html>"""
+
+
+SISTEMA = """<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>TTOKEM OS - Sistema</title>
+<style>
+:root{--bg:#06070b;--card:#0f121b;--bd:#1e2536;--pr:#00e5b8;--se:#9d6bff;--tx:#eef1f8;--mu:#8089a6}
+*{box-sizing:border-box;margin:0}body{background:var(--bg);color:var(--tx);font:16px/1.55 system-ui,sans-serif}
+.w{max-width:1000px;margin:auto;padding:20px 16px 60px}h1{font-size:34px;line-height:1.15;margin:34px 0 10px}
+h1 span{background:linear-gradient(90deg,var(--pr),var(--se));-webkit-background-clip:text;color:transparent}
+h2{font-size:13px;letter-spacing:2px;text-transform:uppercase;color:var(--pr);margin:38px 0 12px;font-family:monospace}
+p{color:var(--mu)}.g{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(210px,1fr))}
+.c{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:14px}.c b{display:block;margin-bottom:4px}
+.c small{color:var(--mu)}.k{border-color:var(--pr)}.tag{font:11px monospace;color:var(--se)}
+table{width:100%;border-collapse:collapse;font-size:14px}td,th{padding:8px;border-bottom:1px solid var(--bd);text-align:left}
+th{color:var(--mu);font-weight:500}.ok{color:var(--pr)}.no{color:#ff6b81}a{color:var(--pr)}
+.b{display:inline-block;margin:10px 10px 0 0;padding:11px 16px;border-radius:8px;background:var(--pr);color:#000;font-weight:700;text-decoration:none}
+.b.s{background:transparent;border:1px solid var(--bd);color:var(--tx)}
+</style></head><body><div class="w">
+<div class="tag">TTOKEM OS</div><h1>Um sistema aberto para <span>prompt, texto e vídeo</span></h1>
+<p>Camadas simples, cada uma testada. Os modelos de IA (como o Beam, da Reflection) são o núcleo; o TTOKEM OS é a
+camada de cima: escolhe a IA, comprime o pedido sem perder dados, gera o vídeo e entrega no app.</p>
+<a class="b" href="/painel">Abrir o painel</a>
+<a class="b s" href="https://github.com/fabiopimentapinto16-ai/ttokem-backend">Código no GitHub</a>
+<h2>Camadas</h2><div class="g">
+<div class="c k"><span class="tag">NÚCLEO</span><b>Maestro de IAs</b><small>Troca sozinho de IA quando uma acaba o crédito. Descobre os modelos disponíveis. Aceita Beam (Reflection), Groq, Gemini, OpenRouter, Cerebras, Mistral e Hugging Face.</small></div>
+<div class="c"><span class="tag">COMPRESSÃO</span><b>Ttokem</b><small>Modo seguro (padrão) e agressivo. Auditoria que cancela a troca se um fato, número, verbo ou palavra de lógica sumir.</small></div>
+<div class="c"><span class="tag">ÁRVORE</span><b>Rua Neural v2</b><small>Modelos prontos em hierarquia, com restrições herdadas. Só troca frases praticamente idênticas.</small></div>
+<div class="c"><span class="tag">COMANDOS</span><b>/codigo /video /eficiente...</b><small>Escolhidos pela frase normal. Não alteram o seu texto.</small></div>
+<div class="c"><span class="tag">VÍDEO</span><b>Maestro de vídeo</b><small>Vários geradores com plano B. O gerador nunca recebe o texto bruto.</small></div>
+<div class="c"><span class="tag">APP</span><b>Ttoken Studio (Android)</b><small>Gera, legenda e compartilha. APK compilado pelo GitHub Actions.</small></div>
+</div>
+<h2>Ao vivo</h2><div class="c"><div id="vivo">Consultando o servidor...</div></div>
+<h2>Comparação medida (50 prompts variados)</h2>
+<div class="c"><table><tr><th>Motor</th><th>Economia</th><th>Dados intactos</th></tr>
+<tr><td>T24 unificado</td><td>41,2%</td><td class="no">40/50</td></tr>
+<tr><td>NHHC-4F</td><td>21,2%</td><td>47/50</td></tr>
+<tr><td><b>Ttokem agressivo</b></td><td>34,2%</td><td class="ok">50/50</td></tr>
+<tr><td>Ttokem seguro</td><td>0,8%</td><td class="ok">50/50</td></tr></table>
+<p style="margin-top:10px;font-size:13px">Tokenizador aproximado e auditor próprio. Reproduza com <code>tests/benchmark_concorrentes.py</code>
+(usa tiktoken no Colab). Os modelos prontos chegam a 95-98% só quando o prompt repete um modelo.</p></div>
+</div><script>
+fetch('/health').then(r=>r.json()).then(d=>{const a=d.ativos||{};
+document.getElementById('vivo').innerHTML='Versão <b>'+d.versao+'</b><br>IAs de texto ativas: <b>'+((a.texto||[]).join(', ')||'nenhuma configurada')+
+'</b><br>Geradores de vídeo: <b>'+((a.video||[]).join(', ')||'nenhum')+'</b>'}).catch(()=>{document.getElementById('vivo').textContent='Servidor indisponível agora.'});
 </script></body></html>"""

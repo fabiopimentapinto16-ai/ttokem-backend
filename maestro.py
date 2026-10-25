@@ -30,6 +30,8 @@ PROVIDERS = {
     "openrouter": ("https://openrouter.ai/api/v1", "openrouter/free"),
     "cerebras": ("https://api.cerebras.ai/v1", "llama-3.3-70b"),
     "mistral": ("https://api.mistral.ai/v1", "mistral-small-latest"),
+    # Beam (Reflection AI, open-weight 501B MoE): API compatível com OpenAI. Só entra com chave.
+    "reflection": ("https://api.reflection.ai/openai/v1", "Beam-1.0-501B-A23B"),
     # Hugging Face Inference Providers (HF_TOKEN): créditos mensais pequenos, fica por último
     "huggingface": ("https://router.huggingface.co/v1", "meta-llama/Llama-3.3-70B-Instruct"),
 }

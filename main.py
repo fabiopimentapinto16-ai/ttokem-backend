@@ -132,6 +132,12 @@ class PainelReq(BaseModel):
     modo: str = "auto"       # auto (seguro) | agressivo
 
 
+@app.get("/sistema")
+def sistema_pagina():
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse(painel.SISTEMA)
+
+
 @app.get("/painel")
 def painel_pagina():
     from fastapi.responses import HTMLResponse
