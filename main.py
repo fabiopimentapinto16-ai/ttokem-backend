@@ -132,6 +132,12 @@ class PainelReq(BaseModel):
     modo: str = "auto"       # auto (seguro) | agressivo
 
 
+@app.get("/api/sistema")
+def sistema_info():
+    """Parâmetros reais do motor (árvore, limites, auditoria). Sem chaves nem segredos."""
+    return painel.sistema_info(RATE_LIMIT)
+
+
 @app.get("/sistema")
 def sistema_pagina():
     from fastapi.responses import HTMLResponse

@@ -38,6 +38,47 @@ def processar(prompt: str, modo: str, llm, idioma: str = "português") -> dict:
     return base
 
 
+
+def sistema_info(rate_limit=None) -> dict:
+    """Parâmetros reais do motor (lidos do código, nunca escritos à mão na página)."""
+    import rua_neural, maestro, pipeline
+    arv = []
+    def anda(no, prof):
+        arv.append({"nome": no.nome, "nivel": no.nivel, "prof": prof,
+                    "resumo": no.resumo if no.nivel == "MODEL" else "",
+                    "frases": len(no.frases), "regras_proprias": len(no.regras),
+                    "regras_herdadas": len(no.regras_herdadas())})
+        for f in no.filhos:
+            anda(f, prof + 1)
+    anda(rua_neural.BIBLIOTECA.raiz, 0)
+    return {
+        "arvore": arv,
+        "parametros": {
+            "Economia mínima para comprimir (MIN_SAVING)": f"{ttokem.MIN_SAVING:.0%}",
+            "Similaridade mínima para trocar frase por modelo (Rua Neural)": f"{rua_neural.LIMITE:.0%}",
+            "Texto longo para o codebook V24 (caracteres)": ttokem.MIN_CHARS_V24,
+            "Modos de compressão": "auto (seguro, padrão) | light | v24 | agressivo",
+            "Cache de resposta de texto (painel)": f"{CACHE_TTL // 3600} h",
+            "Cache de roteiro/legenda (pipeline)": f"{pipeline.LLM_CACHE_TTL // 3600} h",
+            "Limite de pedidos por IP": f"{rate_limit}/hora" if rate_limit else "configurável",
+            "Máximo de comandos por pedido": comandos.MAX_COMANDOS,
+            "Idioma padrão": pipeline.IDIOMA_PADRAO,
+        },
+        "auditor": ["fatos: e-mails, URLs, #ids e tokens com número ou _ não podem sumir",
+                    "lógica: not/no/never/only/or/but/if, não/nunca/apenas/somente/ou/mas/se/sem mantêm a contagem",
+                    "verbos de ação (create, build, gere, crie...) não podem sumir",
+                    "restrições herdadas pela árvore (9:16, 5 s, \"sem texto\", versões...) mantêm a contagem",
+                    "em qualquer dúvida o motor devolve o texto original (fail-closed)"],
+        "regras_por_ramo": {k: len(v) for k, v in rua_neural.REGRAS.items()},
+        "dicionarios": {k: len(v) for k, v in ttokem._LIVROS.items()},
+        "nhhc4f": {f: [{"tipos": list(t), "de": rx, "para": novo} for t, rx, novo in itens]
+                   for f, itens in ttokem.NHHC4F.items()},
+        "modelos_prontos": {k: {"tipo": v["tipo"], "frases": len(v["frases"])}
+                            for k, v in ttokem.PRESETS.items()},
+        "comandos": comandos.catalogo(),
+        "provedores_texto": list(maestro.PROVIDERS),
+    }
+
 HTML = """<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>TTOKEM OS</title>
 <style>
@@ -116,6 +157,20 @@ camada de cima: escolhe a IA, comprime o pedido sem perder dados, gera o vídeo 
 <div class="c"><span class="tag">VÍDEO</span><b>Maestro de vídeo</b><small>Vários geradores com plano B. O gerador nunca recebe o texto bruto.</small></div>
 <div class="c"><span class="tag">APP</span><b>Ttoken Studio (Android)</b><small>Gera, legenda e compartilha. APK compilado pelo GitHub Actions.</small></div>
 </div>
+<h2>Como funciona a Rua Neural</h2><div class="c" id="como">
+<ol style="margin-left:18px;color:var(--mu)">
+<li><b style="color:var(--tx)">Raiz → Contexto → Tarefa → Modelo.</b> A tarefa (imagem, vídeo ou código) vem do comando ou das pistas da frase.</li>
+<li><b style="color:var(--tx)">Seleção em sequência.</b> Cada frase do pedido só é comparada com os modelos DAQUELA tarefa.</li>
+<li><b style="color:var(--tx)">Troca só se for praticamente idêntica:</b> mesma lógica (não, ou, se...), mesmos fatos (números, ids, e-mails) e as mesmas palavras de conteúdo.</li>
+<li><b style="color:var(--tx)">Herança de restrições.</b> O que um nó pai exige (ex.: 9:16, "sem texto"), o filho herda. Se o texto final perder algo, a troca é cancelada.</li>
+<li><b style="color:var(--tx)">Referência curta (@modelo) expandida antes da IA.</b> Nada se perde: o gerador recebe o texto completo.</li>
+<li><b style="color:var(--tx)">Sem IA e sem dependências:</b> determinístico, roda no celular e no servidor grátis.</li></ol></div>
+<h2>A árvore (lida do motor ao vivo)</h2><div class="c"><div id="arv" style="font:13px/1.8 monospace">...</div></div>
+<h2>Parâmetros</h2><div class="c"><table id="par"></table></div>
+<h2>Auditoria de dados (fail-closed)</h2><div class="c"><ul id="aud" style="margin-left:18px;color:var(--mu)"></ul></div>
+<h2>NHHC-4F: 4 fatores como equivalências</h2><div class="c"><table id="nh"></table>
+<p style="margin-top:8px;font-size:13px">Só linguagem natural. Cada troca passa pelo auditor acima.</p></div>
+<h2>Dicionários, modelos prontos e comandos</h2><div class="c"><div id="dic"></div></div>
 <h2>Ao vivo</h2><div class="c"><div id="vivo">Consultando o servidor...</div></div>
 <h2>Comparação medida (50 prompts variados)</h2>
 <div class="c"><table><tr><th>Motor</th><th>Economia</th><th>Dados intactos</th></tr>
@@ -126,6 +181,18 @@ camada de cima: escolhe a IA, comprime o pedido sem perder dados, gera o vídeo 
 <p style="margin-top:10px;font-size:13px">Tokenizador aproximado e auditor próprio. Reproduza com <code>tests/benchmark_concorrentes.py</code>
 (usa tiktoken no Colab). Os modelos prontos chegam a 95-98% só quando o prompt repete um modelo.</p></div>
 </div><script>
+
+fetch('/api/sistema').then(r=>r.json()).then(s=>{
+const E=x=>String(x).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+document.getElementById('arv').innerHTML=s.arvore.map(n=>'<div style="padding-left:'+(n.prof*18)+'px"><span class="'+(n.nivel==='MODEL'?'ok':'')+'">'+E(n.nome)+'</span> <small style="color:var(--mu)">'+n.nivel+(n.nivel==='MODEL'?' · '+n.frases+' frases · '+E(n.resumo):' · herda '+n.regras_herdadas+' regras')+'</small></div>').join('');
+document.getElementById('par').innerHTML=Object.entries(s.parametros).map(([k,v])=>'<tr><td>'+E(k)+'</td><td><b>'+E(v)+'</b></td></tr>').join('');
+document.getElementById('aud').innerHTML=s.auditor.map(a=>'<li>'+E(a)+'</li>').join('');
+let nh='';for(const [f,it] of Object.entries(s.nhhc4f)){for(const x of it){nh+='<tr><td>'+f+'</td><td><code>'+E(x.de)+'</code></td><td>'+(x.para?E(x.para):'(remove)')+'</td></tr>'}}
+document.getElementById('nh').innerHTML='<tr><th>Fator</th><th>Frase</th><th>Vira</th></tr>'+nh;
+document.getElementById('dic').innerHTML='Dicionários por tipo: '+Object.entries(s.dicionarios).map(([k,v])=>k+' ('+v+')').join(', ')+
+'<br>Modelos prontos: '+Object.entries(s.modelos_prontos).map(([k,v])=>k+' ['+v.tipo+', '+v.frases+' frases]').join(', ')+
+'<br>Comandos: '+s.comandos.map(c=>c.comando).join(' ')+'<br>IAs de texto suportadas: '+s.provedores_texto.join(', ');
+}).catch(()=>{document.getElementById('arv').textContent='Servidor indisponível agora.'});
 fetch('/health').then(r=>r.json()).then(d=>{const a=d.ativos||{};
 document.getElementById('vivo').innerHTML='Versão <b>'+d.versao+'</b><br>IAs de texto ativas: <b>'+((a.texto||[]).join(', ')||'nenhuma configurada')+
 '</b><br>Geradores de vídeo: <b>'+((a.video||[]).join(', ')||'nenhum')+'</b>'}).catch(()=>{document.getElementById('vivo').textContent='Servidor indisponível agora.'});

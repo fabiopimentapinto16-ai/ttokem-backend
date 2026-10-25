@@ -837,7 +837,7 @@ class TestPaginaPainel(unittest.TestCase):
                 for d in n.decorator_list:
                     if isinstance(d, ast.Call) and d.args and isinstance(d.args[0], ast.Constant):
                         rotas.add(d.args[0].value)
-        for r in ("/painel", "/sistema", "/api/painel", "/api/comandos"):
+        for r in ("/painel", "/sistema", "/api/sistema", "/api/painel", "/api/comandos"):
             self.assertIn(r, rotas)
 
     def test_html_valido_e_equilibrado(self):
@@ -910,3 +910,19 @@ class TestSistemaEBeam(unittest.TestCase):
             self.assertTrue(s[0]["base"].startswith("https://api.reflection.ai/"))
         finally:
             del os.environ["REFLECTION_API_KEY"]
+
+
+class TestSistemaInfo(unittest.TestCase):
+    def test_info_reflete_o_motor_real(self):
+        import painel, json, rua_neural
+        s = painel.sistema_info(20)
+        json.dumps(s)                                    # serializável
+        nomes = {n["nome"] for n in s["arvore"]}
+        self.assertTrue({"RAIZ", "CONTEXTO", "TAREFA_CODIGO"} <= nomes)
+        self.assertEqual(s["parametros"]["Similaridade mínima para trocar frase por modelo (Rua Neural)"],
+                         f"{rua_neural.LIMITE:.0%}")
+        self.assertIn("ROLE", s["nhhc4f"])
+        self.assertEqual(set(s["modelos_prontos"]), set(ttokem.PRESETS))
+        txt = json.dumps(s).lower()
+        for segredo in ("api_key", "ghp_", "sk-"):
+            self.assertNotIn(segredo, txt.replace("reflection_api_key", ""))
