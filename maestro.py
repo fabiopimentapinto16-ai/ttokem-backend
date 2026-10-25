@@ -42,7 +42,8 @@ LEGACY_KEYS = {"gemini": ["GOOGLE_API_KEY"],
 # Provedores desligam modelos o tempo todo: em vez de confiar em nomes fixos, o maestro
 # pergunta ao provedor quais modelos existem (GET /models) e escolhe os melhores.
 _EXCLUI = ("whisper", "guard", "safeguard", "tts", "orpheus", "compound", "embed", "playai",
-           "image", "audio", "live", "robotics", "moderation", "vision-preview")
+           "image", "audio", "live", "robotics", "moderation", "vision-preview",
+           "inkling")      # exigem "agentic harness": dão HTTP 403 em chat comum
 _PREF = {
     "groq": ["gpt-oss-120b", "qwen3.8", "qwen3.6", "gpt-oss-20b", "llama-3.3", "llama-4", "llama-3.1"],
     "gemini": ["3.1-flash-lite", "3-flash", "flash-latest", "2.5-flash-lite", "2.5-flash", "flash"],

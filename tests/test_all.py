@@ -982,3 +982,9 @@ class TestPlanoBTavus(unittest.TestCase):
         finally:
             for k in ("TAVUS_API_KEY", "PEXELS_API_KEY", "TAVUS_AUTO", "VIDEO_ORDER"):
                 os.environ.pop(k, None)
+
+
+class TestExcluiModelosSoAgenticos(unittest.TestCase):
+    def test_inkling_nao_e_escolhido(self):
+        ids = ["thinkingmachines/inkling:free", "thinkingmachines/inkling-small:free", "openai/gpt-oss-120b"]
+        self.assertEqual(maestro._rank("groq", ids), ["openai/gpt-oss-120b"])
