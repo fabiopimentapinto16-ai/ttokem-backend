@@ -758,3 +758,37 @@ class TestAnuncioFotoMeuVideo(Base):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestComandos(unittest.TestCase):
+    def setUp(self):
+        import comandos
+        self.c = comandos
+
+    def test_frase_normal_escolhe_comandos_sozinho(self):
+        r = self.c.analisar("eu quero com eficiência esse código de login em Kivy")
+        self.assertIn("codigo", r["comandos"])
+        self.assertIn("eficiente", r["comandos"])
+        self.assertEqual(r["tipo"], "codigo")
+        self.assertEqual(r["texto"], "eu quero com eficiência esse código de login em Kivy")
+
+    def test_comando_digitado_manda_e_sai_do_texto(self):
+        r = self.c.analisar('/resumir "Explique o que é cache em 2 frases."')
+        self.assertEqual(r["comandos"], ["resumir"])
+        self.assertEqual(r["texto"], "Explique o que é cache em 2 frases.")
+
+    def test_barra_no_meio_ou_desconhecida_e_texto(self):
+        for t in ["Crie um endpoint /health em FastAPI.", "/health caiu"]:
+            self.assertEqual(self.c.analisar(t)["texto"], t)
+        r = self.c.analisar('"Como funciona o cache?"')
+        self.assertEqual(r["explicitos"], [])      # aspas sozinhas não viram comando
+
+    def test_tipos_competem_e_limite(self):
+        r = self.c.analisar("vídeo de um carro com legenda, resumir, explicar, traduzir, anúncio")
+        self.assertLessEqual(len(r["comandos"]), self.c.MAX_COMANDOS)
+        self.assertEqual(sum(1 for c in r["comandos"] if c in ("codigo", "video", "imagem")), 1)
+
+    def test_sem_pista_nao_inventa(self):
+        r = self.c.analisar("bom dia tudo bem")
+        self.assertEqual(r["comandos"], [])
+        self.assertEqual(r["instrucao"], "")

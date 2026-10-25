@@ -23,6 +23,7 @@ import gitops
 import pipeline
 import trending
 import ttokem
+import comandos
 import video as video_mod
 from maestro import Maestro
 from pipeline import LLM_CACHE, VIDEO_CACHE   # noqa: F401  (mesmos objetos)
@@ -110,7 +111,7 @@ def raiz():
     return {"ok": True, "app": "Ttoken Studio"}
 
 
-VERSAO = "1.10.1"
+VERSAO = "1.11.0"
 
 
 def _resumo():
@@ -144,12 +145,15 @@ def chat(req: ChatReq, request: Request):
     for h in (req.historico or [])[-10:]:
         if isinstance(h, dict) and h.get("role") in ("user", "assistant") and h.get("content"):
             msgs.append({"role": h["role"], "content": str(h["content"])[:4000]})
-    msgs.append({"role": "user", "content": req.mensagem.strip()})
+    cmd = comandos.analisar(req.mensagem)
+    if cmd["instrucao"]:
+        msgs[0]["content"] += " Instruções do pedido: " + cmd["instrucao"]
+    msgs.append({"role": "user", "content": cmd["texto"] or req.mensagem.strip()})
     try:
         texto, api = llm.chat(msgs, max_tokens=1500)
     except Exception as e:
         raise HTTPException(502, f"IA indisponível: {e}")
-    return {"ok": True, "resposta": texto, "ia": api}
+    return {"ok": True, "resposta": texto, "ia": api, "comandos": cmd["mostrar"]}
 
 
 class ColabReq(BaseModel):
@@ -268,7 +272,17 @@ def testar(request: Request):
 def comprimir(req: ComprimirReq):
     if req.modo not in ("auto", "light", "v24", "agressivo"):
         raise HTTPException(400, "modo deve ser auto, light, v24 ou agressivo")
-    return ttokem.compress(req.texto, req.modo, req.tipo or None, presets=True)
+    cmd = comandos.analisar(req.texto)
+    out = ttokem.compress(cmd["texto"], req.modo, req.tipo or cmd["tipo"] or None, presets=True)
+    out["comandos"] = cmd["mostrar"]
+    return out
+
+
+@app.get("/api/comandos")
+def listar_comandos(texto: str = ""):
+    """Catálogo de comandos; com ?texto=... mostra quais seriam escolhidos sozinhos."""
+    return {"catalogo": comandos.catalogo(),
+            "detectado": comandos.analisar(texto) if texto.strip() else None}
 
 
 def _limite(request) -> bool:

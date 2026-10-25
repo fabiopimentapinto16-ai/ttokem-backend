@@ -9,6 +9,7 @@ import re
 import time
 
 import ttokem
+import comandos
 from maestro import AllProvidersFailed
 from video import VideoFailed
 
@@ -62,7 +63,10 @@ def produzir(ideia, plataforma, llm, videos, report, regenerar=False,
     Sempre termina com report(status="pronto") ou report(status="erro")."""
     try:
         # 1) Ttokem: só comprime se realmente economiza (ideias curtas passam direto)
-        comp = ttokem.compress(ideia, "agressivo" if modo_ttokem == "agressivo" else "auto")
+        cmd = comandos.analisar(ideia)
+        comp = ttokem.compress(cmd["texto"] or ideia,
+                               "agressivo" if modo_ttokem == "agressivo" else "auto",
+                               cmd["tipo"])
         report(etapa="IA escrevendo roteiro e legenda", passo=1,
                tokens={"antes": comp["original_tokens"],
                        "depois": comp["compressed_tokens"],
@@ -72,7 +76,7 @@ def produzir(ideia, plataforma, llm, videos, report, regenerar=False,
         anuncio = tipo == "anuncio"
         idioma = limpar_idioma(idioma)
         ckey = hashlib.sha1(
-            f"{tipo}|{idioma}|{plataforma}|{comp['text'].lower()}".encode()).hexdigest()
+            f"{tipo}|{idioma}|{plataforma}|{cmd['mostrar']}|{comp['text'].lower()}".encode()).hexdigest()
         hit = LLM_CACHE.get(ckey)
         if hit and not regenerar and hit[0] > time.time():
             data, api_llm = hit[1], hit[2] + " (cache)"
@@ -83,7 +87,8 @@ def produzir(ideia, plataforma, llm, videos, report, regenerar=False,
                                                    ).replace("{IDIOMA}", idioma)},
                     {"role": "user",
                      "content": f"Plataforma: {plataforma}\nIdioma da legenda e do roteiro: "
-                                f"{idioma}\nIdeia: {comp['text']}"}])
+                                f"{idioma}\nIdeia: {comp['text']}"
+                                + (f"\nInstruções: {cmd['instrucao']}" if cmd["instrucao"] else "")}])
             except AllProvidersFailed as e:
                 report(status="erro", erro=f"Nenhuma IA disponível: {e}")
                 return
