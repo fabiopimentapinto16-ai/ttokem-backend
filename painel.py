@@ -13,10 +13,12 @@ REPOS = [("App Android (APK)", "https://github.com/fabiopimentapinto16-ai/ttokem
 
 def processar(prompt: str, modo: str, llm, idioma: str = "português") -> dict:
     t0 = time.perf_counter()
-    modo = "agressivo" if modo == "agressivo" else "auto"
+    modo = modo if modo in ("auto", "light", "agressivo", "v24") else "auto"
     cmd = comandos.analisar(prompt)
     comp = ttokem.compress(cmd["texto"] or prompt, modo, cmd["tipo"], presets=True)
     enviado = comp["text"]
+    if comp.get("refusal"):               # v24 recusou (perderia dado): manda o texto original
+        enviado = cmd["texto"] or prompt
     base = {"comandos": cmd["mostrar"] or "(nenhum)", "tipo": cmd["tipo"] or "geral",
             "modo": comp["mode"], "tokens_antes": comp["original_tokens"],
             "tokens_depois": comp["compressed_tokens"], "economia_pct": comp["saving_pct"],
@@ -79,6 +81,38 @@ def sistema_info(rate_limit=None) -> dict:
         "provedores_texto": list(maestro.PROVIDERS),
     }
 
+
+MOTORES = [   # números MEDIDOS (tests/benchmark_concorrentes.py, tokenizador aproximado)
+    {"id": "auto", "nome": "Seguro (padrão)", "economia": "0,8% (variados) · até 15% em código conhecido",
+     "risco": "nenhum medido", "perda": "50/50 prompts intactos",
+     "quando": "Sempre que a qualidade dos dados vem primeiro."},
+    {"id": "agressivo", "nome": "Agressivo", "economia": "34% (variados) · 37% em código conhecido",
+     "risco": "baixo (telegráfico, auditado)", "perda": "50/50 prompts intactos",
+     "quando": "Prompts longos em que o estilo telegráfico não atrapalha."},
+    {"id": "light", "nome": "Leve", "economia": "0,8%", "risco": "nenhum medido",
+     "perda": "50/50 prompts intactos", "quando": "Só limpeza de enchimento."},
+    {"id": "v24", "nome": "Codebook V24", "economia": "alta só em tickets/ocorrências longos",
+     "risco": "ALTO: usa códigos (§ID) e perdeu dados em 31 de 50 prompts",
+     "perda": "19/50 prompts intactos",
+     "quando": "Só textos longos de ocorrência. Evite em pedidos de vídeo, imagem ou código."},
+]
+
+
+def biblioteca() -> dict:
+    """Motores e modelos prontos (@id) para a pessoa escolher na página."""
+    modelos = []
+    for pid, pre in ttokem.PRESETS.items():
+        cheio = " ".join(pre["frases"])
+        curto = "@" + pid
+        modelos.append({"id": pid, "tipo": pre["tipo"], "frases": len(pre["frases"]),
+                        "prompt": cheio, "referencia": curto,
+                        "tokens_cheio": ttokem.est_tokens(cheio),
+                        "tokens_curto": ttokem.est_tokens(curto),
+                        "economia": f"{(1 - ttokem.est_tokens(curto) / ttokem.est_tokens(cheio)):.0%}"})
+    return {"motores": MOTORES, "modelos": modelos,
+            "aviso": "Os 95-98% valem só para modelos prontos: a referência é expandida de volta "
+                     "ANTES da IA, então nada se perde. Códigos tipo V24 podem danificar a mensagem."}
+
 HTML = """<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>TTOKEM OS</title>
 <style>
@@ -95,7 +129,9 @@ pre{white-space:pre-wrap;word-wrap:break-word;font:13px/1.6 monospace;color:#ccd
 </style></head><body><h1>TTOKEM OS // PAINEL <a href="/sistema" style="font-size:13px;letter-spacing:0">sobre o sistema</a></h1>
 <div class="g"><div class="c" style="grid-column:1/-1"><div class="l">Escreva normal: o comando é escolhido sozinho</div>
 <textarea id="p" placeholder="Ex: eu quero com eficiência esse código de login em Kivy"></textarea>
-<label><input type="checkbox" id="ag"> modo agressivo (economiza mais; dados continuam auditados)</label><br>
+<label>Motor: <select id="md" style="background:#000;color:#fff;border:1px solid var(--bd);border-radius:6px;padding:6px">
+<option value="auto">Seguro (padrão)</option><option value="agressivo">Agressivo (economiza mais, auditado)</option>
+<option value="light">Leve</option><option value="v24">Codebook V24 (risco: pode danificar a mensagem)</option></select></label><br>
 <button id="b" onclick="run()">Executar</button><button class="s" id="v" onclick="video()">Gerar vídeo com esta ideia</button></div>
 <div class="c"><div class="l">Caminho (comandos)</div><div class="v" id="m1">-</div></div>
 <div class="c"><div class="l">Compressão</div><div class="v" id="m2">-</div></div>
@@ -108,9 +144,10 @@ pre{white-space:pre-wrap;word-wrap:break-word;font:13px/1.6 monospace;color:#ccd
 <a href="https://github.com/fabiopimentapinto16-ai/ttokem-backend">Backend</a></div></div></div>
 <script>
 const $=i=>document.getElementById(i);
+(function(){const q=new URLSearchParams(location.search);if(q.get('texto'))$('p').value=q.get('texto');if(q.get('modo'))$('md').value=q.get('modo')})();
 async function run(){const p=$('p').value.trim();if(!p)return;$('b').disabled=true;$('o').textContent='...';
 try{const r=await fetch('/api/painel',{method:'POST',headers:{'Content-Type':'application/json'},
-body:JSON.stringify({prompt:p,modo:$('ag').checked?'agressivo':'auto'})});const d=await r.json();
+body:JSON.stringify({prompt:p,modo:$('md').value})});const d=await r.json();
 if(!r.ok)throw new Error(d.detail||r.status);
 $('m1').textContent=d.comandos+' | '+d.tipo;
 $('m2').innerHTML=d.tokens_antes+' -> '+d.tokens_depois+' tokens ('+d.economia_pct+'%) <span class="'+(d.dados_intactos?'ok">dados intactos':'no">verificar')+'</span>';
@@ -119,7 +156,7 @@ $('m4').textContent=d.ia+' | '+d.latencia_ms+' ms';$('o').textContent=d.resposta
 }catch(e){$('o').textContent='Erro: '+e.message}finally{$('b').disabled=false}}
 async function video(){const p=$('p').value.trim();if(p.length<3)return;$('v').disabled=true;$('vd').textContent='enviando...';
 try{const r=await fetch('/api/gerar',{method:'POST',headers:{'Content-Type':'application/json'},
-body:JSON.stringify({ideia:p,economia:$('ag').checked?'agressivo':'auto'})});const d=await r.json();
+body:JSON.stringify({ideia:p,economia:($('md').value==='agressivo'?'agressivo':'auto')})});const d=await r.json();
 if(!r.ok)throw new Error(d.detail||r.status);const id=d.job_id;
 for(let i=0;i<120;i++){await new Promise(s=>setTimeout(s,5000));const s=await (await fetch('/api/status/'+id)).json();
 $('vd').textContent=(s.etapa||s.status);if(s.status==='pronto'){$('vd').innerHTML=s.video_url?'<a href="'+s.video_url+'">Abrir vídeo</a>':'pronto (só legenda)';
@@ -171,6 +208,9 @@ camada de cima: escolhe a IA, comprime o pedido sem perder dados, gera o vídeo 
 <h2>NHHC-4F: 4 fatores como equivalências</h2><div class="c"><table id="nh"></table>
 <p style="margin-top:8px;font-size:13px">Só linguagem natural. Cada troca passa pelo auditor acima.</p></div>
 <h2>Dicionários, modelos prontos e comandos</h2><div class="c"><div id="dic"></div></div>
+<h2>Biblioteca: escolha o motor e o prompt</h2>
+<div class="c"><p id="aviso" style="margin-bottom:10px"></p><div class="g" id="mot"></div></div>
+<div class="g" id="mod" style="margin-top:10px"></div>
 <h2>Ao vivo</h2><div class="c"><div id="vivo">Consultando o servidor...</div></div>
 <h2>Comparação medida (50 prompts variados)</h2>
 <div class="c"><table><tr><th>Motor</th><th>Economia</th><th>Dados intactos</th></tr>
@@ -193,6 +233,17 @@ document.getElementById('dic').innerHTML='Dicionários por tipo: '+Object.entrie
 '<br>Modelos prontos: '+Object.entries(s.modelos_prontos).map(([k,v])=>k+' ['+v.tipo+', '+v.frases+' frases]').join(', ')+
 '<br>Comandos: '+s.comandos.map(c=>c.comando).join(' ')+'<br>IAs de texto suportadas: '+s.provedores_texto.join(', ');
 }).catch(()=>{document.getElementById('arv').textContent='Servidor indisponível agora.'});
+
+fetch('/api/prompts').then(r=>r.json()).then(b=>{
+const E=x=>String(x).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+document.getElementById('aviso').textContent=b.aviso;
+document.getElementById('mot').innerHTML=b.motores.map(m=>'<div class="c"><b>'+E(m.nome)+'</b><small>Economia: '+E(m.economia)+'<br>Risco: <span class="'+(m.risco.startsWith('ALTO')?'no':'ok')+'">'+E(m.risco)+'</span><br>'+E(m.perda)+'<br>'+E(m.quando)+'</small><br><a class="b s" href="/painel?modo='+m.id+'">Usar este motor</a></div>').join('');
+window._mods=b.modelos;
+document.getElementById('mod').innerHTML=b.modelos.map((m,i)=>'<div class="c"><span class="tag">MODELO PRONTO · '+E(m.tipo)+'</span><b>'+E(m.id)+'</b><small>'+m.frases+' frases · '+m.tokens_cheio+' → '+m.tokens_curto+' tokens ('+m.economia+' menos, sem perda)</small><pre style="white-space:pre-wrap;font:12px/1.5 monospace;color:#aab;max-height:120px;overflow:auto;margin-top:6px">'+E(m.prompt)+'</pre>'+
+'<button class="b s" data-i="'+i+'" data-k="p">Copiar prompt completo</button><button class="b s" data-i="'+i+'" data-k="r">Copiar '+E(m.referencia)+'</button><a class="b" href="/painel?texto='+encodeURIComponent(m.referencia)+'">Usar no painel</a></div>').join('');
+document.querySelectorAll('button[data-k]').forEach(bt=>bt.onclick=()=>{const m=window._mods[bt.dataset.i];
+navigator.clipboard.writeText(bt.dataset.k==='p'?m.prompt:m.referencia).then(()=>{bt.textContent='Copiado!'}).catch(()=>{bt.textContent='Selecione e copie manualmente'})});
+}).catch(()=>{});
 fetch('/health').then(r=>r.json()).then(d=>{const a=d.ativos||{};
 document.getElementById('vivo').innerHTML='Versão <b>'+d.versao+'</b><br>IAs de texto ativas: <b>'+((a.texto||[]).join(', ')||'nenhuma configurada')+
 '</b><br>Geradores de vídeo: <b>'+((a.video||[]).join(', ')||'nenhum')+'</b>'}).catch(()=>{document.getElementById('vivo').textContent='Servidor indisponível agora.'});

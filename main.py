@@ -132,6 +132,12 @@ class PainelReq(BaseModel):
     modo: str = "auto"       # auto (seguro) | agressivo
 
 
+@app.get("/api/prompts")
+def biblioteca_prompts():
+    """Motores (com economia e risco medidos) e modelos prontos para copiar/usar."""
+    return painel.biblioteca()
+
+
 @app.get("/api/sistema")
 def sistema_info():
     """Parâmetros reais do motor (árvore, limites, auditoria). Sem chaves nem segredos."""

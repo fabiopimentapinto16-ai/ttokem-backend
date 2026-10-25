@@ -837,7 +837,7 @@ class TestPaginaPainel(unittest.TestCase):
                 for d in n.decorator_list:
                     if isinstance(d, ast.Call) and d.args and isinstance(d.args[0], ast.Constant):
                         rotas.add(d.args[0].value)
-        for r in ("/painel", "/sistema", "/api/sistema", "/api/painel", "/api/comandos"):
+        for r in ("/painel", "/sistema", "/api/sistema", "/api/prompts", "/api/painel", "/api/comandos"):
             self.assertIn(r, rotas)
 
     def test_html_valido_e_equilibrado(self):
@@ -926,3 +926,26 @@ class TestSistemaInfo(unittest.TestCase):
         txt = json.dumps(s).lower()
         for segredo in ("api_key", "ghp_", "sk-"):
             self.assertNotIn(segredo, txt.replace("reflection_api_key", ""))
+
+
+class TestBiblioteca(unittest.TestCase):
+    def test_modelos_e_risco_visivel(self):
+        import painel, json
+        b = painel.biblioteca(); json.dumps(b)
+        self.assertEqual({m["id"] for m in b["modelos"]}, set(ttokem.PRESETS))
+        for m in b["modelos"]:
+            self.assertTrue(m["referencia"].startswith("@"))
+            self.assertLess(m["tokens_curto"], m["tokens_cheio"])
+            self.assertEqual(" ".join(ttokem.expandir_presets(m["referencia"]).split()), " ".join(m["prompt"].split()))
+        v24 = [x for x in b["motores"] if x["id"] == "v24"][0]
+        self.assertTrue(v24["risco"].startswith("ALTO"))
+        self.assertEqual({x["id"] for x in b["motores"]}, {"auto", "agressivo", "light", "v24"})
+
+    def test_painel_aceita_todos_os_motores(self):
+        import painel
+        class L:
+            def chat(self, m, max_tokens=0): return "ok", "fake"
+        for modo in ("auto", "light", "agressivo", "v24", "invalido"):
+            painel.CACHE.clear()
+            r = painel.processar("gere um vídeo de um carro vermelho na chuva 9:16", modo, L())
+            self.assertIn(r["modo"], ("auto", "light", "agressivo", "v24", "passthrough"))
