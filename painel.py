@@ -180,12 +180,29 @@ table{width:100%;border-collapse:collapse;font-size:14px}td,th{padding:8px;borde
 th{color:var(--mu);font-weight:500}.ok{color:var(--pr)}.no{color:#ff6b81}a{color:var(--pr)}
 .b{display:inline-block;margin:10px 10px 0 0;padding:11px 16px;border-radius:8px;background:var(--pr);color:#000;font-weight:700;text-decoration:none}
 .b.s{background:transparent;border:1px solid var(--bd);color:var(--tx)}
+.lab{display:grid;gap:12px;grid-template-columns:1.2fr 1fr}@media(max-width:700px){.lab{grid-template-columns:1fr}}
+.lab textarea{width:100%;height:110px;background:#000;color:#fff;border:1px solid var(--bd);border-radius:8px;padding:10px;font:inherit;margin:8px 0}
+.lab select{background:#000;color:#fff;border:1px solid var(--bd);border-radius:6px;padding:9px}.res{margin-top:12px;font:14px/1.6 monospace;color:var(--mu);word-wrap:break-word}
+.sq canvas{width:100%;max-width:360px;aspect-ratio:1;display:block;margin:6px auto;background:#04050a;border-radius:10px;border:1px solid var(--bd)}
+.l{font:11px monospace;color:var(--mu);text-transform:uppercase;letter-spacing:1px}
+code{word-break:break-all}.c{min-width:0;overflow-x:auto}
 </style></head><body><div class="w">
 <div class="tag">TTOKEM OS</div><h1>Um sistema aberto para <span>prompt, texto e vídeo</span></h1>
 <p>Camadas simples, cada uma testada. Os modelos de IA (como o Beam, da Reflection) são o núcleo; o TTOKEM OS é a
 camada de cima: escolhe a IA, comprime o pedido sem perder dados, gera o vídeo e entrega no app.</p>
 <a class="b" href="/painel">Abrir o painel</a>
 <a class="b s" href="https://github.com/fabiopimentapinto16-ai/ttokem-backend">Código no GitHub</a>
+<h2>Laboratório ao vivo</h2>
+<div class="lab"><div class="c"><div class="l">Digite qualquer frase e veja o corte</div>
+<textarea id="lt" placeholder="Ex: Create a high-performance python script using fastapi that compiles into an android apk via buildozer."></textarea>
+<select id="lm"><option value="auto">Seguro (padrão)</option><option value="agressivo">Agressivo</option><option value="light">Leve</option></select>
+<button class="b" id="lb" style="border:0;cursor:pointer">Comprimir</button>
+<div id="lr" class="res">Aguardando...</div></div>
+<div class="c sq"><div class="l">Fluxo do motor (loop)</div><canvas id="cv" width="360" height="360"></canvas>
+<small id="cvl" style="color:var(--mu)">Entrada → fatores → Rua Neural → auditoria → saída</small></div></div>
+<h2>Planos (estrutura)</h2><div class="g">
+<div class="c"><span class="tag">STARTER</span><b>Grátis com o APK</b><small>Limite de uso de 50% da capacidade. Modo seguro e agressivo auditados.</small></div>
+<div class="c k"><span class="tag">PRO</span><b>R$ 10 (Brasil) · US$ 2 (exterior)</b><small>Sem o limite do Starter. Cobrança ainda não ativada: esta é só a estrutura planejada.</small></div></div>
 <h2>Camadas</h2><div class="g">
 <div class="c k"><span class="tag">NÚCLEO</span><b>Maestro de IAs</b><small>Troca sozinho de IA quando uma acaba o crédito. Descobre os modelos disponíveis. Aceita Beam (Reflection), Groq, Gemini, OpenRouter, Cerebras, Mistral e Hugging Face.</small></div>
 <div class="c"><span class="tag">COMPRESSÃO</span><b>Ttokem</b><small>Modo seguro (padrão) e agressivo. Auditoria que cancela a troca se um fato, número, verbo ou palavra de lógica sumir.</small></div>
@@ -234,6 +251,37 @@ document.getElementById('dic').innerHTML='Dicionários por tipo: '+Object.entrie
 '<br>Comandos: '+s.comandos.map(c=>c.comando).join(' ')+'<br>IAs de texto suportadas: '+s.provedores_texto.join(', ');
 }).catch(()=>{document.getElementById('arv').textContent='Servidor indisponível agora.'});
 
+
+(function(){
+const $=i=>document.getElementById(i),E=x=>String(x).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+$('lb').onclick=async()=>{const t=$('lt').value.trim();if(!t)return;$('lb').disabled=true;$('lr').textContent='...';
+try{const r=await fetch('/api/comprimir',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({texto:t,modo:$('lm').value})});
+const d=await r.json();if(!r.ok)throw new Error(d.detail||r.status);const ok=d.semantica&&d.semantica.intacta!==false;
+$('lr').innerHTML='Antes: <b>'+d.original_tokens+'</b> tokens<br>Depois: <b>'+d.compressed_tokens+'</b> tokens<br>Economia: <b class="'+(d.saving_pct>0?'ok':'')+'">'+d.saving_pct+'%</b> · dados <b class="'+(ok?'ok':'no')+'">'+(ok?'intactos':'verificar')+'</b><br>Comandos: '+E(d.comandos||'(nenhum)')+'<br><br>'+E(d.text);
+if(window._pulso)window._pulso();}catch(e){$('lr').textContent='Erro: '+e.message}finally{$('lb').disabled=false}};
+// canvas: malha ROLE/CONTEXT/TASK/CONSTRAINTS -> Rua Neural -> Auditoria -> Saida (loop)
+const cv=$('cv'),cx=cv.getContext('2d'),W=360,H=360;
+const N=[{n:'Entrada',x:180,y:30},{n:'ROLE',x:60,y:110},{n:'CONTEXT',x:140,y:110},{n:'TASK',x:220,y:110},{n:'CONSTRAINTS',x:300,y:110},
+{n:'Rua Neural',x:180,y:200},{n:'Auditoria',x:180,y:275},{n:'Saída',x:180,y:335},{n:'Merkle (planejado)',x:315,y:260,plan:1}];
+const Ed=[[0,1],[0,2],[0,3],[0,4],[1,5],[2,5],[3,5],[4,5],[5,6],[6,7],[6,8]];
+let pulsos=[],ultimo=0,visivel=true,reduz=matchMedia('(prefers-reduced-motion: reduce)').matches;
+function novo(){const e=Ed[Math.floor(Math.random()*4)];pulsos.push({e:e,t:0,fila:[[5,6],[6,7]]})}
+window._pulso=()=>{for(let i=0;i<4;i++)pulsos.push({e:Ed[i],t:-i*.08,fila:[[5,6],[6,7]]})};
+function seg(e){return [N[e[0]],N[e[1]]]}
+function desenha(ts){if(!visivel){requestAnimationFrame(desenha);return}
+cx.clearRect(0,0,W,H);cx.lineWidth=1;
+Ed.forEach(e=>{const[a,b]=seg(e);cx.strokeStyle=(a.plan||b.plan)?'#3a3358':'#1e2a40';cx.setLineDash((a.plan||b.plan)?[4,4]:[]);cx.beginPath();cx.moveTo(a.x,a.y);cx.lineTo(b.x,b.y);cx.stroke()});cx.setLineDash([]);
+if(!reduz&&ts-ultimo>900){ultimo=ts;novo();if(pulsos.length>14)pulsos.shift()}
+pulsos=pulsos.filter(p=>{p.t+=.018;if(p.t<0)return true;
+if(p.t>=1){if(p.fila.length){p.e=p.fila.shift();p.t=0;return true}return false}
+const[a,b]=seg(p.e),x=a.x+(b.x-a.x)*p.t,y=a.y+(b.y-a.y)*p.t;
+const g=cx.createRadialGradient(x,y,0,x,y,10);g.addColorStop(0,'#00e5b8');g.addColorStop(1,'rgba(0,229,184,0)');cx.fillStyle=g;cx.beginPath();cx.arc(x,y,10,0,7);cx.fill();return true});
+N.forEach(n=>{cx.fillStyle=n.plan?'#14111f':'#0f121b';cx.strokeStyle=n.plan?'#9d6bff':'#00e5b8';cx.setLineDash(n.plan?[3,3]:[]);cx.beginPath();cx.arc(n.x,n.y,n.n.length>8?4+0:6,0,7);cx.fill();cx.stroke();cx.setLineDash([]);
+cx.fillStyle='#cfd6ea';cx.font='10px monospace';cx.textAlign='center';cx.fillText(n.n,n.x,n.y-11)});
+requestAnimationFrame(desenha)}
+document.addEventListener('visibilitychange',()=>{visivel=!document.hidden});
+if(reduz){pulsos=[];desenha(0)}else requestAnimationFrame(desenha);
+})();
 fetch('/api/prompts').then(r=>r.json()).then(b=>{
 const E=x=>String(x).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 document.getElementById('aviso').textContent=b.aviso;
