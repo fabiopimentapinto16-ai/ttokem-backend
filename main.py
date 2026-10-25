@@ -24,6 +24,7 @@ import pipeline
 import trending
 import ttokem
 import comandos
+import painel
 import video as video_mod
 from maestro import Maestro
 from pipeline import LLM_CACHE, VIDEO_CACHE   # noqa: F401  (mesmos objetos)
@@ -124,6 +125,28 @@ def health():
     """Diagnóstico: mostra QUAIS provedores estão ativos (nunca as chaves)."""
     return {"ok": True, "versao": VERSAO, "python": sys.version.split()[0],
             "ativos": _resumo(), "ias": llm.status(), "videos": videos.status()}
+
+
+class PainelReq(BaseModel):
+    prompt: str = Field(min_length=2, max_length=4000)
+    modo: str = "auto"       # auto (seguro) | agressivo
+
+
+@app.get("/painel")
+def painel_pagina():
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse(painel.HTML)
+
+
+@app.post("/api/painel")
+def painel_processar(req: PainelReq, request: Request):
+    """Painel TTOKEM OS: comandos + compressão + cache + IA + latência de um pedido."""
+    if not _limite(request):
+        raise HTTPException(429, "Limite de pedidos por hora atingido.")
+    try:
+        return painel.processar(req.prompt, req.modo, llm)
+    except Exception as e:
+        raise HTTPException(502, f"IA indisponível: {e}")
 
 
 class ChatReq(BaseModel):

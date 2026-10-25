@@ -792,3 +792,35 @@ class TestComandos(unittest.TestCase):
         r = self.c.analisar("bom dia tudo bem")
         self.assertEqual(r["comandos"], [])
         self.assertEqual(r["instrucao"], "")
+
+
+class TestPainel(unittest.TestCase):
+    class _LLM:
+        def __init__(self): self.n = 0
+        def chat(self, msgs, max_tokens=0):
+            self.n += 1
+            return "ok", "fake"
+
+    def test_cache_real_e_comandos(self):
+        import painel
+        painel.CACHE.clear()
+        llm = self._LLM()
+        a = painel.processar("eu quero com eficiência esse código de login em Kivy", "auto", llm)
+        b = painel.processar("eu quero com eficiência esse código de login em Kivy", "auto", llm)
+        self.assertEqual((a["cache"], b["cache"]), ("MISS", "HIT"))
+        self.assertEqual(llm.n, 1)                       # o HIT não gastou IA
+        self.assertIn("/codigo", a["comandos"])
+        self.assertTrue(a["dados_intactos"])
+
+    def test_modo_separa_cache(self):
+        import painel
+        painel.CACHE.clear()
+        llm = self._LLM()
+        painel.processar("gere um vídeo de um carro vermelho na chuva", "auto", llm)
+        r = painel.processar("gere um vídeo de um carro vermelho na chuva", "agressivo", llm)
+        self.assertEqual(r["cache"], "MISS")
+
+    def test_html_tem_botao_de_video(self):
+        import painel
+        self.assertIn("/api/gerar", painel.HTML)
+        self.assertIn("/api/painel", painel.HTML)
