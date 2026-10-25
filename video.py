@@ -141,6 +141,10 @@ def _providers():
                                  "model": m, "key": rk})
     order = [n.strip() for n in os.environ.get("VIDEO_ORDER", "colab,mpt,proxy,magichour,fal,replicate,bigmodel,pexels,tavus").split(",")]
     order += [n for n in out if n not in order]
+    if os.environ.get("TAVUS_AUTO", "1").strip() == "0":     # avatar só se estiver em VIDEO_ORDER
+        explicit = "tavus" in [n.strip() for n in os.environ.get("VIDEO_ORDER", "").split(",")]
+        if not explicit:
+            order = [n for n in order if n != "tavus"]
     return [p for n in order for p in out.get(n, [])]
 
 
@@ -156,6 +160,7 @@ class VideoMaestro:
     def __init__(self, poll_every=5, max_wait=240):
         self.poll_every, self.max_wait = poll_every, max_wait
         self._cool, self._lock = {}, threading.Lock()
+        self.ultimo_erros = []
 
     def status(self):
         now = time.time()
@@ -446,6 +451,7 @@ class VideoMaestro:
             raise VideoFailed("Nenhum gerador de vídeo configurado "
                               "(FAL_KEY, REPLICATE_API_TOKEN ou VIDEO_PROVIDERS)")
         errors = []
+        self.ultimo_erros = errors          # a pipeline mostra o motivo se cair num plano B
         for p in provs:
             if self._cool.get(p["id"], 0) > time.time():
                 errors.append(f"{p['id']}: em cooldown")

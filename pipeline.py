@@ -146,6 +146,11 @@ def produzir(ideia, plataforma, llm, videos, report, regenerar=False,
             if str(api_video).startswith("pexels"):
                 extra["aviso"] = ("Video de banco gratis (Pexels), nao gerado por IA: "
                                   "serve de apoio para a sua legenda.")
+            if str(api_video).startswith("tavus"):
+                motivo = "; ".join(getattr(videos, "ultimo_erros", []) or [])[:300]
+                extra["aviso"] = ("ATENCAO: este e o avatar do Tavus falando o roteiro, NAO um video da "
+                                  "cena. Os geradores de cena falharam"
+                                  + (f" ({motivo})" if motivo else "") + ". Confira creditos/chaves.")
             report(status="pronto", video_url=url, api_video=api_video,
                    etapa="Pronto", passo=3, **extra)
         except VideoFailed as e:

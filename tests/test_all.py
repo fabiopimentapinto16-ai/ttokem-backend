@@ -949,3 +949,36 @@ class TestBiblioteca(unittest.TestCase):
             painel.CACHE.clear()
             r = painel.processar("gere um vídeo de um carro vermelho na chuva 9:16", modo, L())
             self.assertIn(r["modo"], ("auto", "light", "agressivo", "v24", "passthrough"))
+
+
+class TestPlanoBTavus(unittest.TestCase):
+    def setUp(self):
+        global pipeline
+        import pipeline
+    def test_aviso_claro_quando_cai_no_avatar(self):
+        class V:
+            ultimo_erros = ["magichour:magic: sem crédito/chave (HTTP 402)"]
+            def proxima(self): return ("tavus", 2, 5)
+            def generate(self, p, i=""): return "http://x/v.mp4", "tavus:rc9cff32", None
+        got = {}
+        class L:
+            def chat(s, m, max_tokens=0):
+                return '{"titulo":"t","roteiro":"r","legenda":"l","hashtags":[],"prompt_video":"um carro vermelho na chuva a noite"}', "fake"
+        pipeline.produzir("um carro vermelho na chuva", "tiktok", L(), V(), lambda **k: got.update(k))
+        self.assertEqual(got["status"], "pronto")
+        self.assertIn("NAO um video da cena", got["aviso"])
+        self.assertIn("HTTP 402", got["aviso"])
+
+    def test_tavus_auto_desligavel(self):
+        import video as vd
+        os.environ.update(TAVUS_API_KEY="t", PEXELS_API_KEY="p")
+        os.environ.pop("VIDEO_ORDER", None)
+        try:
+            self.assertIn("tavus", [p["kind"] for p in vd._providers()])
+            os.environ["TAVUS_AUTO"] = "0"
+            self.assertNotIn("tavus", [p["kind"] for p in vd._providers()])
+            os.environ["VIDEO_ORDER"] = "pexels,tavus"       # explícito sempre vale
+            self.assertIn("tavus", [p["kind"] for p in vd._providers()])
+        finally:
+            for k in ("TAVUS_API_KEY", "PEXELS_API_KEY", "TAVUS_AUTO", "VIDEO_ORDER"):
+                os.environ.pop(k, None)
