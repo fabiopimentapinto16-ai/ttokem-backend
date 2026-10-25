@@ -824,3 +824,36 @@ class TestPainel(unittest.TestCase):
         import painel
         self.assertIn("/api/gerar", painel.HTML)
         self.assertIn("/api/painel", painel.HTML)
+
+
+class TestPaginaPainel(unittest.TestCase):
+    """Garante, sem precisar do FastAPI, que a página existe, está registrada e é HTML válido."""
+    def test_rotas_registradas_no_main(self):
+        import ast
+        src = open(os.path.join(os.path.dirname(__file__), "..", "main.py"), encoding="utf-8").read()
+        rotas = set()
+        for n in ast.walk(ast.parse(src)):
+            if isinstance(n, ast.FunctionDef):
+                for d in n.decorator_list:
+                    if isinstance(d, ast.Call) and d.args and isinstance(d.args[0], ast.Constant):
+                        rotas.add(d.args[0].value)
+        for r in ("/painel", "/api/painel", "/api/comandos"):
+            self.assertIn(r, rotas)
+
+    def test_html_valido_e_equilibrado(self):
+        import painel
+        from html.parser import HTMLParser
+        pilha, erros = [], []
+        class P(HTMLParser):
+            def handle_starttag(s, t, a):
+                if t not in ("meta", "br", "input", "link"): pilha.append(t)
+            def handle_endtag(s, t):
+                if not pilha or pilha.pop() != t: erros.append(t)
+        P().feed(painel.HTML)
+        self.assertEqual(erros, [])
+        self.assertEqual(pilha, [])
+        self.assertTrue(painel.HTML.startswith("<!DOCTYPE html>"))
+
+    def test_dockerfile_copia_painel(self):
+        d = open(os.path.join(os.path.dirname(__file__), "..", "Dockerfile")).read()
+        self.assertIn("COPY *.py", d)        # painel.py é .py: entra no deploy
