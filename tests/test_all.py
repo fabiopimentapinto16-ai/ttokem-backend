@@ -857,3 +857,28 @@ class TestPaginaPainel(unittest.TestCase):
     def test_dockerfile_copia_painel(self):
         d = open(os.path.join(os.path.dirname(__file__), "..", "Dockerfile")).read()
         self.assertIn("COPY *.py", d)        # painel.py é .py: entra no deploy
+
+
+class TestNHHC4F(unittest.TestCase):
+    def test_equivalencias_naturais_e_dados_intactos(self):
+        casos = [
+            ("Create a high-performance python script using fastapi that compiles into an android apk via buildozer.",
+             ["fastapi", "buildozer", "apk"]),
+            ("Build a python script using fastapi with docker render postgresql and 50% free tier.",
+             ["fastapi", "docker", "render", "postgresql", "50%"]),
+        ]
+        for p, termos in casos:
+            o, n = ttokem.aplicar_dicionario(p, "codigo")
+            self.assertGreater(n, 0)
+            self.assertLess(len(o), len(p))
+            self.assertTrue(ttokem.semantica(p, o)["intacta"])
+            for t in termos:
+                self.assertIn(t, o.lower())
+            self.assertNotIn("py:", o)            # nada de códigos: linguagem natural
+
+    def test_nao_troca_quando_perderia_logica(self):
+        p = "Do not use a python script using fastapi, only docker."
+        o, _ = ttokem.aplicar_dicionario(p, "codigo")
+        self.assertTrue(ttokem.semantica(p, o)["intacta"])
+        self.assertIn("not", o.lower())
+        self.assertIn("only", o.lower())

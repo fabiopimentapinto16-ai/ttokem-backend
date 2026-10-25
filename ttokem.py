@@ -115,6 +115,39 @@ _LIVROS = {
 }
 _LIVROS = {k: [(re.compile(a, re.IGNORECASE), b) for a, b in v] for k, v in _LIVROS.items()}
 
+# --- Adaptação do NHHC-4F: os 4 fatores (ROLE, CONTEXT, TASK, CONSTRAINTS) como equivalências
+# APROVADAS em linguagem natural (nunca códigos tipo "py:fastapi"). Cada entrada só tira o que
+# é redundante por definição (ex.: FastAPI já é Python, APK já é Android) e passa pelo mesmo
+# auditor fail-closed (fatos, lógica, verbos, restrições). Fator -> (tipos, regex, curto).
+NHHC4F = {
+    "ROLE": [
+        (("codigo",), r"(?:as )?an? expert python developer", "python expert"),
+    ],
+    "TASK": [
+        (("codigo",), r"\bpython script using fastapi\b", "fastapi script"),
+        (("codigo",), r"\bandroid apk via buildozer\b", "buildozer apk"),
+        (("codigo",), r"\bandroid apk\b", "apk"),
+    ],
+    "CONTEXT": [
+        (("codigo", "video", "imagem"), r"\bin order to\b", "to"),
+        (("codigo", "video", "imagem"), r"\bdue to the fact that\b", "because"),
+        (("codigo", "video", "imagem"), r"\ba large number of\b", "many"),
+        (("codigo", "video", "imagem"), r"\bis able to\b", "can"),
+        (("codigo", "video", "imagem"), r"\bat this point in time\b", "now"),
+        (("codigo", "video", "imagem"), r"\beach and every\b", "each"),
+        (("codigo", "video", "imagem"), r"\bthe vast majority of\b", "most"),
+        (("codigo", "video", "imagem"), r"\bfor the purpose of\b", "for"),
+        (("codigo", "video", "imagem"), r"\bwith (?:regard|respect) to\b", "about"),
+    ],
+    "CONSTRAINTS": [
+        (("codigo", "video", "imagem"), r"\bit is important to (?:note|remember) that\s*", ""),
+    ],
+}
+for _fator, _itens in NHHC4F.items():
+    for _tipos, _rx, _novo in _itens:
+        for _t in _tipos:
+            _LIVROS[_t].append((re.compile(_rx, re.IGNORECASE), _novo))
+
 _PISTAS = {
     "codigo": r"\b(?:python|kivy|fastapi|apk|buildozer|endpoint|workflow|script|c[oó]digo|"
               r"fun[cç][aã]o|refator|json|http|thread|api)\b",
