@@ -8,6 +8,7 @@ import base64
 import hmac
 import os
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -24,6 +25,11 @@ import pipeline
 import trending
 import ttokem
 import comandos
+import cineasta
+import contas
+import filme
+import legal
+import sqlite3
 import painel
 import video as video_mod
 from maestro import Maestro
@@ -36,6 +42,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
 
 llm = Maestro()
 videos = VideoMaestro()
+cofre = contas.Cofre()
 pool = ThreadPoolExecutor(max_workers=4)
 JOBS, JOBS_LOCK = {}, threading.Lock()
 IMGS = {}                      # id -> (bytes, mime, expira): foto do produto, 1 h
@@ -54,6 +61,12 @@ class GerarReq(BaseModel):
     sem_video: bool = False        # usuário já tem o vídeo: só gerar legenda
     idioma: str = Field(default="Português do Brasil", max_length=60)   # qualquer idioma
     economia: str = "auto"         # auto (segura) | agressivo (telegráfico, economiza mais)
+
+
+class CineastaReq(BaseModel):
+    ideia: str = Field(min_length=3, max_length=4000)
+    cenas: int = 3                 # 2 a 4; cada cena gasta 1 geração de vídeo
+    idioma: str = Field(default="Português do Brasil", max_length=60)
 
 
 class ComprimirReq(BaseModel):
@@ -94,7 +107,7 @@ def _cleanup():
             del JOBS[k]
 
 
-def _run(job_id, req: GerarReq, imagem_url=""):
+def _run(job_id, req: GerarReq, imagem_url="", conta="", gasto=None):
     def report(**kw):
         if kw.get("video_url"):
             with JOBS_LOCK:
@@ -102,9 +115,80 @@ def _run(job_id, req: GerarReq, imagem_url=""):
                     kw["video_url"] = f"{PUBLIC_URL}/api/video/{job_id}"
         _set(job_id, **kw)
 
-    pipeline.produzir(req.ideia, req.plataforma, llm, videos, report, req.regenerar,
-                      tipo=req.tipo, imagem_url=imagem_url, sem_video=req.sem_video,
-                      idioma=req.idioma, modo_ttokem=req.economia)
+    try:
+        pipeline.produzir(req.ideia, req.plataforma, llm, videos, report, req.regenerar,
+                          tipo=req.tipo, imagem_url=imagem_url, sem_video=req.sem_video,
+                          idioma=req.idioma, modo_ttokem=req.economia)
+    finally:
+        with JOBS_LOCK:
+            j = JOBS.get(job_id) or {}
+            deu_certo = j.get("status") == "pronto" and (req.sem_video or j.get("video_url"))
+        if gasto and not deu_certo:         # não saiu vídeo: o cofre devolve as moedas
+            _devolver(conta, gasto, sum(gasto))
+            _set(job_id, devolvido=sum(gasto))
+
+
+def _conta(request) -> str:
+    """Código da conta do cofre (cabeçalho X-Conta). Vazio = app antigo: nada é cobrado."""
+    cid = (request.headers.get("x-conta", "") or "").strip()
+    if cid and not contas.conta_valida(cid):
+        raise HTTPException(400, "código de conta inválido")
+    return cid
+
+
+def _cobrar(cid: str, moedas: int):
+    """Cobra do cofre. None = sem conta (ou cofre fora do ar: nunca trava o app)."""
+    if not cid:
+        return None
+    try:
+        gasto = cofre.gastar(cid, moedas)
+    except sqlite3.Error as e:
+        print("[cofre] erro de banco, sem cobrar:", e, flush=True)
+        return None
+    if gasto is None:
+        raise HTTPException(402, "Sem moedas no cofre. Elas voltam todo dia e as não usadas "
+                                 "acumulam. Veja /api/cofre.")
+    return gasto
+
+
+def _devolver(cid: str, gasto, moedas: int):
+    """Devolve `moedas` do que foi cobrado (as grátis primeiro, depois as compradas)."""
+    if not (cid and gasto and moedas > 0):
+        return
+    g = min(gasto[0], moedas)
+    try:
+        cofre.devolver(cid, (g, min(gasto[1], moedas - g)))
+    except sqlite3.Error as e:
+        print("[cofre] erro ao devolver:", e, flush=True)
+
+
+def _run_cineasta(job_id, req: CineastaReq, conta="", gasto=None):
+    def report(**kw):
+        if "cenas" in kw:      # troca links que exigem token por rota do backend
+            pub, srcs = [], {}
+            orig = [dict(c) for c in kw["cenas"]]
+            for c in kw["cenas"]:
+                c = dict(c)
+                dl = c.pop("_dl", None)
+                if c.get("video_url") and dl:
+                    srcs[c["n"]] = (c["video_url"], dl)
+                    c["video_url"] = f"{PUBLIC_URL}/api/cena/{job_id}/{c['n']}"
+                pub.append(c)
+            kw["cenas"] = pub
+            kw["_cenas_src"] = srcs
+            kw["_cenas_orig"] = [(o["video_url"], o.get("_dl")) for o in orig if o.get("video_url")]
+        _set(job_id, **kw)
+
+    try:
+        cineasta.produzir(req.ideia, req.cenas, llm, videos, report, req.idioma)
+    except Exception as e:      # nada pode deixar o app esperando para sempre
+        _set(job_id, status="erro", erro=f"Falha: {e}")
+    with JOBS_LOCK:
+        cenas = (JOBS.get(job_id) or {}).get("cenas") or []
+    falhas = sum(1 for c in cenas if not c.get("video_url")) if cenas else req.cenas
+    _devolver(conta, gasto, falhas * contas.CUSTO_VIDEO)
+    if falhas and conta:
+        _set(job_id, devolvido=falhas * contas.CUSTO_VIDEO)
 
 
 @app.get("/")
@@ -112,7 +196,7 @@ def raiz():
     return {"ok": True, "app": "Ttoken Studio"}
 
 
-VERSAO = "1.11.0"
+VERSAO = "1.12.0"
 
 
 def _resumo():
@@ -355,14 +439,129 @@ def gerar(req: GerarReq, request: Request):
     if not _limite(request):
         raise HTTPException(429, "Limite de pedidos por hora atingido. Tente mais tarde.")
     _cleanup()
-    imagem_url = _guardar_imagem(req.imagem_b64) if req.imagem_b64 else ""
+    conta = _conta(request)
+    gasto = None if req.sem_video else _cobrar(conta, contas.CUSTO_VIDEO)
+    try:
+        imagem_url = _guardar_imagem(req.imagem_b64) if req.imagem_b64 else ""
+    except HTTPException:
+        _devolver(conta, gasto, sum(gasto or (0, 0)))
+        raise
     job_id = uuid.uuid4().hex[:12]
     with JOBS_LOCK:
         JOBS[job_id] = {"status": "processando", "etapa": "Iniciando",
                         "passo": 0, "criado": time.time(),
                         "atualizado": time.time()}
-    pool.submit(_run, job_id, req, imagem_url)
+    pool.submit(_run, job_id, req, imagem_url, conta, gasto)
     return {"success": True, "job_id": job_id}
+
+
+@app.post("/api/cineasta")
+def cineasta_gerar(req: CineastaReq, request: Request):
+    """Modo Cineasta: 2 a 4 cenas, cada uma é 1 geração de vídeo (conta no limite por hora)."""
+    n = cineasta.limitar(req.cenas)
+    for _ in range(n):
+        if not _limite(request):
+            raise HTTPException(429, "Limite de pedidos por hora atingido. Tente mais tarde.")
+    _cleanup()
+    req.cenas = n
+    conta = _conta(request)
+    gasto = _cobrar(conta, n * contas.CUSTO_VIDEO)
+    job_id = uuid.uuid4().hex[:12]
+    with JOBS_LOCK:
+        JOBS[job_id] = {"status": "processando", "etapa": "Iniciando", "passo": 0,
+                        "total_cenas": n, "criado": time.time(), "atualizado": time.time()}
+    pool.submit(_run_cineasta, job_id, req, conta, gasto)
+    return {"success": True, "job_id": job_id, "cenas": n}
+
+
+@app.get("/api/cofre")
+def cofre_saldo(request: Request):
+    """Saldo do cofre da conta (cabeçalho X-Conta). Moedas grátis voltam todo dia e acumulam."""
+    cid = _conta(request)
+    regras = {"custo_video": contas.CUSTO_VIDEO, "diario": contas.DIARIO,
+              "maximo_gratis": contas.MAXIMO}
+    if not cid:
+        return {"conta": False, **regras}
+    try:
+        return {"conta": True, **cofre.saldo(cid)}
+    except sqlite3.Error as e:
+        raise HTTPException(503, f"cofre indisponível: {e}")
+
+
+class CreditoReq(BaseModel):
+    conta: str
+    moedas: int = Field(gt=0, le=1_000_000)
+
+
+@app.post("/api/cofre/creditar")
+def cofre_creditar(req: CreditoReq, request: Request):
+    """Admin: soma moedas COMPRADAS (sem limite, sem validade). Senha: ADMIN_SECRET ou BUILD_SECRET."""
+    segredo = (os.environ.get("ADMIN_SECRET") or os.environ.get("BUILD_SECRET") or "").strip()
+    if not segredo:
+        raise HTTPException(503, "defina ADMIN_SECRET no servidor")
+    dado = request.headers.get("x-admin-secret", "")
+    if not hmac.compare_digest(dado.encode(), segredo.encode()):
+        raise HTTPException(403, "senha de admin incorreta")
+    if not contas.conta_valida(req.conta):
+        raise HTTPException(400, "código de conta inválido")
+    cofre.creditar(req.conta, req.moedas)
+    return {"ok": True, **cofre.saldo(req.conta)}
+
+
+@app.get("/api/geradores")
+def geradores():
+    """Painel dos geradores de vídeo: ordem, quem está disponível, último erro de cada um."""
+    ordem = [n.strip() for n in os.environ.get(
+        "VIDEO_ORDER", "colab,mpt,proxy,magichour,fal,replicate,bigmodel,agnes,pexels,tavus"
+    ).split(",")]
+    return {"ordem": ordem, "geradores": videos.status(),
+            "recentes": list(videos.historico)[-15:],
+            "dica": "Sem gerador de IA funcionando? Crie BIGMODEL_API_KEY, AGNES_API_KEY "
+                    "ou PEXELS_API_KEY no servidor."}
+
+
+@app.get("/api/filme/{job_id}")
+def baixar_filme(job_id: str):
+    """Junta as cenas do Cineasta num único MP4 vertical (monta na 1ª vez, depois reaproveita)."""
+    from fastapi.responses import FileResponse
+    with JOBS_LOCK:
+        job = JOBS.get(job_id)
+        if not job or "_cenas_orig" not in job:
+            raise HTTPException(404, "filme não encontrado (o pedido expirou?)")
+        pronto, cenas = job.get("_filme"), list(job["_cenas_orig"])
+    if not (pronto and os.path.exists(pronto)):
+        pronto = os.path.join(tempfile.gettempdir(), f"filme_{job_id}.mp4")
+        try:
+            filme.juntar(cenas, pronto)
+        except filme.FilmeErro as e:
+            raise HTTPException(503, f"não deu para montar o filme: {e}. As cenas continuam "
+                                     "disponíveis separadas.")
+        with JOBS_LOCK:
+            if job_id in JOBS:
+                JOBS[job_id]["_filme"] = pronto
+    return FileResponse(pronto, media_type="video/mp4", filename="filme.mp4")
+
+
+@app.get("/privacidade")
+def privacidade():
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse(legal.PRIVACIDADE)
+
+
+@app.get("/api/cena/{job_id}/{n}")
+def baixar_cena(job_id: str, n: int):
+    """Repassa uma cena quando o gerador exige token no download."""
+    import requests
+    from fastapi.responses import StreamingResponse
+    with JOBS_LOCK:
+        item = ((JOBS.get(job_id) or {}).get("_cenas_src") or {}).get(n)
+    if not item:
+        raise HTTPException(404, "cena não encontrada")
+    up = requests.get(item[0], headers=item[1], stream=True, timeout=60)
+    if up.status_code != 200:
+        raise HTTPException(502, f"origem respondeu {up.status_code}")
+    return StreamingResponse(up.iter_content(65536),
+                             media_type=up.headers.get("content-type", "video/mp4"))
 
 
 @app.get("/api/img/{img_id}")

@@ -1060,3 +1060,337 @@ class TestInOrderToEArtigo(unittest.TestCase):
         o, _ = ttokem.aplicar_dicionario("compiles into an android apk via buildozer.", "codigo")
         self.assertNotIn("an buildozer", o)
         self.assertIn("buildozer apk", o)
+
+
+class TestAgnes(unittest.TestCase):
+    def setUp(self):
+        for k in list(os.environ):
+            if any(x in k for x in ("AGNES", "PEXELS", "TAVUS", "BIGMODEL", "VIDEO_ORDER")):
+                os.environ.pop(k, None)
+
+    def tearDown(self):
+        self.setUp()
+
+    def _vm(self):
+        vm = video.VideoMaestro(poll_every=0, max_wait=5)
+        return vm
+
+    def test_sem_chave_nao_aparece(self):
+        self.assertFalse([p for p in video._providers() if p["kind"] == "agnes"])
+
+    def test_com_chave_entra_depois_do_bigmodel_e_antes_do_pexels(self):
+        os.environ.update(AGNES_API_KEY="k", BIGMODEL_API_KEY="b", PEXELS_API_KEY="p")
+        kinds = [p["kind"] for p in video._providers()]
+        self.assertEqual(kinds, ["bigmodel", "agnes", "pexels"])
+
+    def _rodar(self, post_js, gets):
+        os.environ["AGNES_API_KEY"] = "k"
+        p = [x for x in video._providers() if x["kind"] == "agnes"][0]
+        vm = self._vm()
+        it = iter(gets)
+        with mock.patch.object(video.requests, "post", return_value=Resp(200, post_js)), \
+             mock.patch.object(video.requests, "get", side_effect=lambda *a, **k: next(it)):
+            return vm._agnes(p, "a red car in the rain")
+
+    def test_sucesso_video_url(self):
+        url, dl = self._rodar({"videoId": "v1"}, [Resp(200, {"status": "running"}),
+                                                    Resp(200, {"status": "succeeded", "video_url": "http://x/v.mp4"})])
+        self.assertEqual(url, "http://x/v.mp4")
+        self.assertIsNone(dl)
+
+    def test_sucesso_url_aninhada_e_taskid(self):
+        url, _ = self._rodar({"task_id": "t1"},
+                             [Resp(200, {"status": "completed", "content": {"video_url": "https://c/v.mp4"}})])
+        self.assertEqual(url, "https://c/v.mp4")
+
+    def test_rota_nova_quando_a_antiga_da_404(self):
+        url, _ = self._rodar({"videoId": "v1"},
+                             [Resp(404, {}), Resp(200, {"status": "succeeded", "data": [{"url": "http://n/v.mp4"}]})])
+        self.assertEqual(url, "http://n/v.mp4")
+
+    def test_falha_vira_videofailed(self):
+        with self.assertRaises(video.VideoFailed):
+            self._rodar({"videoId": "v1"}, [Resp(200, {"status": "failed", "error": "ruim"})])
+
+    def test_sem_id_vira_videofailed(self):
+        with self.assertRaises(video.VideoFailed):
+            self._rodar({"ok": True}, [])
+
+    def test_http_402_vira_sem_credito(self):
+        os.environ["AGNES_API_KEY"] = "k"
+        p = [x for x in video._providers() if x["kind"] == "agnes"][0]
+        with mock.patch.object(video.requests, "post", return_value=Resp(402, {})):
+            with self.assertRaises(video.NoCredit):
+                self._vm()._agnes(p, "x")
+
+
+class TestCineasta(unittest.TestCase):
+    def setUp(self):
+        global cineasta
+        import cineasta
+
+    class L:
+        def __init__(s, raw): s.raw = raw
+        def chat(s, m, max_tokens=0): return s.raw, "fake"
+
+    class V:
+        def __init__(s, falhar=()): s.falhar, s.n = set(falhar), 0
+        def generate(s, p, i=""):
+            s.n += 1
+            if s.n in s.falhar:
+                raise video.VideoFailed("sem crédito")
+            return f"http://x/{s.n}.mp4", "fake", None
+
+    def test_limites_de_cenas(self):
+        self.assertEqual([cineasta.limitar(x) for x in (0, 1, 2, 3, 4, 9, "x", None)], [2, 2, 2, 3, 4, 4, 3, 3])
+
+    def test_plano_completa_cenas_quando_a_ia_manda_menos_ou_lixo(self):
+        t, c, _ = cineasta.planejar(self.L("isso não é json"), "um gato astronauta", 3, "Português do Brasil")
+        self.assertEqual(len(c), 3)
+        self.assertTrue(all(x["prompt_video"] for x in c))
+        raw = '{"titulo":"T","cenas":[{"descricao":"a","prompt_video":"cat on moon"}]}'
+        t, c, _ = cineasta.planejar(self.L(raw), "gato", 3, "pt")
+        self.assertEqual((t, len(c), c[0]["prompt_video"]), ("T", 3, "cat on moon"))
+
+    def test_plano_com_ia_fora_do_ar(self):
+        class Z:
+            def chat(s, m, max_tokens=0): raise RuntimeError("x")
+        _, c, _ = cineasta.planejar(Z(), "gato", 2, "pt")
+        self.assertEqual(len(c), 2)
+
+    def test_producao_com_uma_cena_falhando(self):
+        got = {}
+        raw = '{"titulo":"T","cenas":[{"descricao":"a","prompt_video":"p1"},{"descricao":"b","prompt_video":"p2"},{"descricao":"c","prompt_video":"p3"}]}'
+        cineasta.produzir("gato", 3, self.L(raw), self.V(falhar={2}), lambda **k: got.update(k))
+        self.assertEqual(got["status"], "pronto")
+        self.assertIn("2", got["aviso"])
+        self.assertEqual([c["video_url"] for c in got["cenas"]], ["http://x/1.mp4", "", "http://x/3.mp4"])
+        self.assertTrue(got["cenas"][1]["erro"])
+
+    def test_todas_falham_vira_erro(self):
+        got = {}
+        cineasta.produzir("gato", 2, self.L("x"), self.V(falhar={1, 2}), lambda **k: got.update(k))
+        self.assertEqual(got["status"], "erro")
+
+    def test_endpoint_conta_uma_geracao_por_cena_e_respeita_limite(self):
+        class Rq:
+            headers = {"x-forwarded-for": "9.9.9.9"}
+            client = None
+        main.RATE.clear()
+        with mock.patch.object(main.pool, "submit") as sub:
+            r = main.cineasta_gerar(main.CineastaReq(ideia="um gato astronauta", cenas=4), Rq())
+        self.assertEqual(r["cenas"], 4)
+        self.assertEqual(len(main.RATE["9.9.9.9"]), 4)
+        sub.assert_called_once()
+        main.RATE["9.9.9.9"].clear()
+        for _ in range(main.RATE_LIMIT - 1):
+            main.RATE["9.9.9.9"].append(time.time())
+        with self.assertRaises(Exception) as cm:
+            main.cineasta_gerar(main.CineastaReq(ideia="um gato astronauta", cenas=3), Rq())
+        self.assertEqual(getattr(cm.exception, "status_code", 429), 429)
+        main.RATE.clear()
+
+    def test_run_cineasta_troca_link_com_token_pela_rota_do_backend(self):
+        class V2:
+            def generate(s, p, i=""): return "http://x/a.mp4", "g", {"Authorization": "Bearer z"}
+        main.JOBS["j1"] = {"status": "processando", "atualizado": time.time()}
+        raw = '{"titulo":"T","cenas":[{"descricao":"a","prompt_video":"p1"},{"descricao":"b","prompt_video":"p2"}]}'
+        with mock.patch.object(main, "llm", self.L(raw)), mock.patch.object(main, "videos", V2()):
+            main._run_cineasta("j1", main.CineastaReq(ideia="um gato astronauta", cenas=2))
+        j = main.JOBS["j1"]
+        self.assertEqual(j["status"], "pronto")
+        self.assertTrue(j["cenas"][0]["video_url"].endswith("/api/cena/j1/1"))
+        self.assertIn(1, j["_cenas_src"])
+        self.assertNotIn("_dl", j["cenas"][0])
+
+
+class TestCofre(unittest.TestCase):
+    def setUp(self):
+        import contas, tempfile
+        self.contas = contas
+        self.cf = contas.Cofre(os.path.join(tempfile.mkdtemp(), "c.db"))
+        self.id = "a" * 20
+        self.t0 = 1_800_000_000
+        self.dia = 86400
+
+    def test_conta_nova_ganha_o_do_dia_e_acumula_sem_perder(self):
+        c = self.contas
+        self.assertEqual(self.cf.saldo(self.id, self.t0)["gratis"], c.DIARIO)
+        # 3 dias sem usar: nada se perde, vai tudo para o cofre
+        self.assertEqual(self.cf.saldo(self.id, self.t0 + 3 * self.dia)["gratis"], 4 * c.DIARIO)
+
+    def test_limite_de_seguranca_do_cofre(self):
+        c = self.contas
+        self.cf.saldo(self.id, self.t0)
+        s = self.cf.saldo(self.id, self.t0 + 400 * self.dia)
+        self.assertEqual(s["gratis"], c.MAXIMO)
+
+    def test_gasta_gratis_primeiro_depois_comprado_e_devolve_igual(self):
+        c = self.contas
+        self.cf.saldo(self.id, self.t0)
+        self.cf.creditar(self.id, 50)
+        g = self.cf.gastar(self.id, c.DIARIO + 20, self.t0)       # tudo grátis + 20 comprados
+        self.assertEqual(g, (c.DIARIO, 20))
+        s = self.cf.saldo(self.id, self.t0)
+        self.assertEqual((s["gratis"], s["comprado"]), (0, 30))
+        self.cf.devolver(self.id, g)
+        s = self.cf.saldo(self.id, self.t0)
+        self.assertEqual((s["gratis"], s["comprado"]), (c.DIARIO, 50))
+
+    def test_sem_saldo_nao_cobra(self):
+        self.cf.saldo(self.id, self.t0)
+        self.assertIsNone(self.cf.gastar(self.id, 10**6, self.t0))
+        self.assertEqual(self.cf.saldo(self.id, self.t0)["gratis"], self.contas.DIARIO)
+
+    def test_comprado_nao_expira_nem_tem_limite(self):
+        self.cf.saldo(self.id, self.t0)
+        self.cf.creditar(self.id, 10**5)
+        s = self.cf.saldo(self.id, self.t0 + 400 * self.dia)
+        self.assertEqual(s["comprado"], 10**5)
+
+    def test_id_de_conta_invalido(self):
+        for ruim in ("", "curto", "a b " * 8, "x" * 100, "../../etc/passwd" * 3):
+            self.assertFalse(self.contas.conta_valida(ruim))
+        self.assertTrue(self.contas.conta_valida("abcDEF123_-abcDEF123"))
+
+
+class TestCofreNosEndpoints(unittest.TestCase):
+    def setUp(self):
+        import contas, tempfile
+        self.contas = contas
+        self.old = main.cofre
+        main.cofre = contas.Cofre(os.path.join(tempfile.mkdtemp(), "e.db"))
+        main.RATE.clear()
+        self.conta = "conta" + "z" * 15
+
+        class Rq:
+            def __init__(s, conta=""):
+                s.headers = {"x-forwarded-for": "7.7.7.7", **({"x-conta": conta} if conta else {})}
+                s.client = None
+        self.Rq = Rq
+
+    def tearDown(self):
+        main.cofre = self.old
+        main.RATE.clear()
+
+    def test_gerar_cobra_e_sem_cabecalho_nao_cobra(self):
+        with mock.patch.object(main.pool, "submit"):
+            main.gerar(main.GerarReq(ideia="um carro vermelho"), self.Rq(self.conta))
+            main.gerar(main.GerarReq(ideia="um carro vermelho"), self.Rq())
+        s = main.cofre.saldo(self.conta)
+        self.assertEqual(s["gratis"], self.contas.DIARIO - self.contas.CUSTO_VIDEO)
+
+    def test_sem_moedas_da_402_e_legenda_sem_video_nao_cobra(self):
+        main.cofre.saldo(self.conta)
+        main.cofre.gastar(self.conta, self.contas.DIARIO)
+        with mock.patch.object(main.pool, "submit"):
+            with self.assertRaises(Exception) as cm:
+                main.gerar(main.GerarReq(ideia="um carro vermelho"), self.Rq(self.conta))
+            self.assertEqual(getattr(cm.exception, "status_code", 402), 402)
+            main.gerar(main.GerarReq(ideia="um carro vermelho", sem_video=True), self.Rq(self.conta))
+
+    def test_devolve_quando_nao_sai_video(self):
+        gasto = main.cofre.gastar(self.conta, self.contas.CUSTO_VIDEO)
+        main.JOBS["jx"] = {"status": "processando", "atualizado": time.time()}
+        def falha(*a, **k):
+            k_report = a[4]
+            k_report(status="pronto", video_url="", aviso="Vídeo falhou")
+        with mock.patch.object(main.pipeline, "produzir", side_effect=falha):
+            main._run("jx", main.GerarReq(ideia="um carro vermelho"), "", self.conta, gasto)
+        self.assertEqual(main.cofre.saldo(self.conta)["gratis"], self.contas.DIARIO)
+        self.assertTrue(main.JOBS["jx"]["devolvido"])
+
+    def test_nao_devolve_quando_saiu_video(self):
+        gasto = main.cofre.gastar(self.conta, self.contas.CUSTO_VIDEO)
+        main.JOBS["jy"] = {"status": "processando", "atualizado": time.time()}
+        def ok(*a, **k):
+            a[4](status="pronto", video_url="http://x/v.mp4")
+        with mock.patch.object(main.pipeline, "produzir", side_effect=ok):
+            main._run("jy", main.GerarReq(ideia="um carro vermelho"), "", self.conta, gasto)
+        self.assertEqual(main.cofre.saldo(self.conta)["gratis"], self.contas.DIARIO - self.contas.CUSTO_VIDEO)
+
+    def test_cineasta_cobra_por_cena_e_devolve_as_que_falharam(self):
+        n = 3
+        gasto = main.cofre.gastar(self.conta, n * self.contas.CUSTO_VIDEO)
+        class V:
+            k = 0
+            def generate(s, p, i=""):
+                s.k += 1
+                if s.k == 2:
+                    raise video.VideoFailed("x")
+                return f"http://x/{s.k}.mp4", "g", None
+        class L:
+            def chat(s, m, max_tokens=0): return "x", "fake"
+        main.JOBS["jc"] = {"status": "processando", "atualizado": time.time()}
+        with mock.patch.object(main, "llm", L()), mock.patch.object(main, "videos", V()):
+            main._run_cineasta("jc", main.CineastaReq(ideia="um gato astronauta", cenas=n), self.conta, gasto)
+        self.assertEqual(main.cofre.saldo(self.conta)["gratis"],
+                         self.contas.DIARIO - 2 * self.contas.CUSTO_VIDEO)
+
+    def test_cofre_endpoint_e_credito_admin(self):
+        self.assertFalse(main.cofre_saldo(self.Rq())["conta"])
+        self.assertEqual(main.cofre_saldo(self.Rq(self.conta))["gratis"], self.contas.DIARIO)
+        os.environ["ADMIN_SECRET"] = "segredo"
+        try:
+            class Ad(self.Rq):
+                def __init__(s, senha):
+                    super().__init__(); s.headers["x-admin-secret"] = senha
+            with self.assertRaises(Exception):
+                main.cofre_creditar(main.CreditoReq(conta=self.conta, moedas=50), Ad("errada"))
+            r = main.cofre_creditar(main.CreditoReq(conta=self.conta, moedas=50), Ad("segredo"))
+            self.assertEqual(r["comprado"], 50)
+        finally:
+            os.environ.pop("ADMIN_SECRET", None)
+
+    def test_banco_quebrado_nao_trava_o_app(self):
+        class Q:
+            def gastar(s, *a): raise main.sqlite3.Error("disco cheio")
+        main.cofre = Q()
+        self.assertIsNone(main._cobrar(self.conta, 10))
+
+
+class TestGeradoresEFilme(unittest.TestCase):
+    def test_painel_de_geradores_mostra_ultimo_erro(self):
+        os.environ["PEXELS_API_KEY"] = "p"
+        try:
+            vm = video.VideoMaestro()
+            vm._evento("pexels", False, "sem crédito")
+            with mock.patch.object(main, "videos", vm):
+                r = main.geradores()
+            self.assertEqual(r["geradores"][0]["ultimo"]["erro"], "sem crédito")
+            self.assertIn("agnes", r["ordem"])
+        finally:
+            os.environ.pop("PEXELS_API_KEY", None)
+
+    def test_filme_junta_cenas_de_verdade(self):
+        import filme, subprocess, tempfile, shutil
+        if not shutil.which("ffmpeg"):
+            self.skipTest("sem ffmpeg")
+        d = tempfile.mkdtemp()
+        arqs = []
+        for i, (w, h) in enumerate([(320, 568), (540, 960)]):       # tamanhos diferentes
+            a = os.path.join(d, f"s{i}.mp4")
+            subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i",
+                            f"testsrc=size={w}x{h}:rate=24:duration=1", "-pix_fmt", "yuv420p", a], check=True)
+            arqs.append(a)
+        class R:
+            status_code = 200
+            def __init__(s, url): s.f = arqs[int(url[-5])]
+            def iter_content(s, n): yield open(s.f, "rb").read()
+        with mock.patch.object(filme.requests, "get", side_effect=lambda u, **k: R(u)):
+            out = filme.juntar([("http://x/0.mp4", None), ("http://x/1.mp4", None)], os.path.join(d, "f.mp4"))
+        pr = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=width,height:format=duration",
+                             "-of", "csv=p=0", out], capture_output=True, text=True).stdout
+        self.assertIn("720,1280", pr)
+        self.assertGreater(float(pr.strip().splitlines()[-1]), 1.8)
+
+    def test_filme_sem_cenas_e_erro_claro(self):
+        import filme
+        with self.assertRaises(filme.FilmeErro):
+            filme.juntar([], "/tmp/x.mp4")
+
+    def test_privacidade_e_site_da_rua_neural_continuam(self):
+        import legal, painel
+        self.assertIn("chaves", legal.PRIVACIDADE.lower())
+        self.assertIn("Rua Neural", painel.SISTEMA)
+        self.assertIn("Rua Neural", " ".join(str(v) for v in painel.sistema_info(20).values()))

@@ -88,7 +88,7 @@ def _extra(var, default=None):
 
 def _providers():
     out = {"pexels": [], "colab": [], "mpt": [], "proxy": [], "magichour": [], "fal": [],
-           "replicate": [], "bigmodel": [], "tavus": []}
+           "replicate": [], "bigmodel": [], "agnes": [], "tavus": []}
     px = _env("PEXELS_API_KEY", "PEXELS_KEY") or _env_fuzzy("PEXELS")
     if px:
         out["pexels"].append({"id": "pexels", "kind": "pexels", "model": "stock", "key": px})
@@ -105,6 +105,12 @@ def _providers():
     if bm:
         m = os.environ.get("BIGMODEL_VIDEO_MODEL", "cogvideox-flash")
         out["bigmodel"].append({"id": f"bigmodel:{m}", "kind": "bigmodel", "model": m, "key": bm})
+    ag = _env("AGNES_API_KEY", "AGNES_TOKEN", "AGNES_KEY")
+    if ag:
+        m = os.environ.get("AGNES_VIDEO_MODEL", "agnes-video-v2.0")
+        base = os.environ.get("AGNES_BASE_URL", "https://apihub.agnes-ai.com/v1").rstrip("/")
+        out["agnes"].append({"id": f"agnes:{m}", "kind": "agnes", "model": m, "key": ag,
+                             "base": base})
     default_model = os.environ.get("VIDEO_MODEL", "wan-fast")
     entries = [e.strip() for e in os.environ.get("VIDEO_PROVIDERS", "").split(",")
                if e.strip()]
@@ -139,7 +145,7 @@ def _providers():
         m = os.environ.get("REPLICATE_VIDEO_MODEL", REPLICATE_DEFAULT_MODEL)
         out["replicate"].append({"id": f"replicate:{m}", "kind": "replicate",
                                  "model": m, "key": rk})
-    order = [n.strip() for n in os.environ.get("VIDEO_ORDER", "colab,mpt,proxy,magichour,fal,replicate,bigmodel,pexels,tavus").split(",")]
+    order = [n.strip() for n in os.environ.get("VIDEO_ORDER", "colab,mpt,proxy,magichour,fal,replicate,bigmodel,agnes,pexels,tavus").split(",")]
     order += [n for n in out if n not in order]
     if os.environ.get("TAVUS_AUTO", "1").strip() == "0":     # avatar só se estiver em VIDEO_ORDER
         explicit = "tavus" in [n.strip() for n in os.environ.get("VIDEO_ORDER", "").split(",")]
@@ -150,7 +156,7 @@ def _providers():
 
 # Estimativa (minutos) por gerador — valores aproximados, não garantidos
 ETA = {"pexels": (0, 1), "colab": (4, 8), "magichour": (1, 3), "fal": (1, 3), "replicate": (2, 6),
-       "bigmodel": (1, 4), "tavus": (2, 5), "mpt": (2, 7), "proxy": (1, 5)}
+       "bigmodel": (1, 4), "agnes": (1, 5), "tavus": (2, 5), "mpt": (2, 7), "proxy": (1, 5)}
 
 
 I2V = ("magichour", "fal")      # geradores com foto-para-vídeo (adaptados da documentação)
@@ -161,11 +167,22 @@ class VideoMaestro:
         self.poll_every, self.max_wait = poll_every, max_wait
         self._cool, self._lock = {}, threading.Lock()
         self.ultimo_erros = []
+        self.historico = []             # últimos eventos (para o painel de geradores)
+        self._ultimo = {}               # gerador -> {"ok": bool, "quando": ts, "erro": str}
+
+    def _evento(self, pid, ok, erro=""):
+        ev = {"gerador": pid, "ok": ok, "erro": erro[:200], "quando": time.time()}
+        with self._lock:
+            self._ultimo[pid] = ev
+            self.historico.append(ev)
+            del self.historico[:-40]
 
     def status(self):
         now = time.time()
         return [{"gerador": p["id"], "tipo": p["kind"],
-                 "disponivel": self._cool.get(p["id"], 0) <= now}
+                 "disponivel": self._cool.get(p["id"], 0) <= now,
+                 "cooldown_s": max(0, int(self._cool.get(p["id"], 0) - now)),
+                 "ultimo": self._ultimo.get(p["id"])}
                 for p in _providers()]
 
     def proxima(self):
@@ -302,6 +319,57 @@ class VideoMaestro:
         self._wait(check)
         if not box.get("url"):
             raise VideoFailed("BigModel sem URL de vídeo")
+        return box["url"], None
+
+    def _agnes(self, p, prompt):
+        """Agnes AI (API gratuita, compatível com OpenAI). A documentação pública não fixa os
+        nomes dos campos de resposta, então aceitamos as variações conhecidas; se nada casar,
+        o erro cai no próximo gerador da lista."""
+        hdr = {"Authorization": f"Bearer {p['key']}", "Content-Type": "application/json"}
+        body = {"model": p["model"], "prompt": (prompt or "")[:500],
+                "width": 768, "height": 1152}                 # vertical 9:16
+        body.update(_extra("AGNES_EXTRA_INPUT"))
+        r = requests.post(f"{p['base']}/videos", headers=hdr, json=body, timeout=30)
+        self._guard(r)
+        j = r.json()
+        vid = next((j.get(k) for k in ("videoId", "video_id", "task_id", "taskId", "id") if j.get(k)), None)
+        if not vid:
+            raise VideoFailed("Agnes sem id de tarefa")
+        box = {}
+
+        def achar_url(d):
+            if not isinstance(d, dict):
+                return None
+            for k in ("video_url", "videoUrl", "url"):
+                if isinstance(d.get(k), str) and d[k].startswith("http"):
+                    return d[k]
+            for k in ("content", "result", "output", "data"):
+                v = d.get(k)
+                if isinstance(v, list) and v:
+                    v = v[0]
+                u = achar_url(v) if isinstance(v, dict) else (v if isinstance(v, str) and v.startswith("http") else None)
+                if u:
+                    return u
+            return None
+
+        def check():
+            rr = requests.get(f"{p['base']}/videos/{vid}", headers=hdr, timeout=20)
+            if rr.status_code == 404:                       # rota nova de consulta da Agnes
+                rr = requests.get(p["base"].rsplit("/v1", 1)[0] + "/agnesapi",
+                                  headers=hdr, params={"video_id": vid}, timeout=20)
+            self._guard(rr)
+            st = rr.json()
+            status = str(st.get("status") or st.get("state") or st.get("task_status") or "").lower()
+            url = achar_url(st)
+            if status in ("failed", "error", "cancelled", "canceled", "fail"):
+                raise VideoFailed(str(st.get("error") or st.get("message") or status)[:200])
+            if url and status in ("", "succeeded", "completed", "success", "done", "finished"):
+                box["url"] = url
+                return True, None
+            return False, None
+        self._wait(check, max_wait=max(self.max_wait, 360))
+        if not box.get("url"):
+            raise VideoFailed("Agnes sem URL de vídeo")
         return box["url"], None
 
     def _proxy(self, p, prompt):
@@ -460,13 +528,17 @@ class VideoMaestro:
                 fn = getattr(self, "_" + p["kind"])
                 if imagem_url:
                     url, dl_headers = fn(p, prompt, imagem_url)
+                    self._evento(p["id"], True)
                     return url, p["id"] + "+foto", dl_headers
                 url, dl_headers = fn(p, prompt)
+                self._evento(p["id"], True)
                 return url, p["id"], dl_headers
             except NoCredit as e:
                 self._penalize(p["id"], 3600)
                 errors.append(f"{p['id']}: sem crédito/chave ({e})")
+                self._evento(p["id"], False, f"sem crédito/chave ({e})")
             except (requests.RequestException, KeyError, ValueError, VideoFailed) as e:
                 self._penalize(p["id"], 120)
                 errors.append(f"{p['id']}: {e}")
+                self._evento(p["id"], False, str(e))
         raise VideoFailed("; ".join(errors))

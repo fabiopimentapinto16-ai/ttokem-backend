@@ -2,3 +2,4 @@ fastapi>=0.110
 uvicorn>=0.29
 requests
 pydantic>=2
+imageio-ffmpeg
