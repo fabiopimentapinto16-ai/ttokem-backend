@@ -123,8 +123,12 @@ def _resumo():
 @app.get("/health")
 def health():
     """Diagnóstico: mostra QUAIS provedores estão ativos (nunca as chaves)."""
+    cfg = {k: bool(os.environ.get(k, "").strip()) for k in
+           ("COLAB_SECRET", "BUILD_SECRET", "GITHUB_TOKEN", "YOUTUBE_API_KEY", "PEXELS_API_KEY",
+            "MAGIC_HOUR_API_KEY", "TAVUS_API_KEY", "FAL_KEY", "REFLECTION_API_KEY")}
     return {"ok": True, "versao": VERSAO, "python": sys.version.split()[0],
-            "ativos": _resumo(), "ias": llm.status(), "videos": videos.status()}
+            "ativos": _resumo(), "ias": llm.status(), "videos": videos.status(),
+            "config": cfg}       # só presente/ausente, nunca o valor
 
 
 class PainelReq(BaseModel):

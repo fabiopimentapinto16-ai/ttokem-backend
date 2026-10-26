@@ -988,3 +988,15 @@ class TestExcluiModelosSoAgenticos(unittest.TestCase):
     def test_inkling_nao_e_escolhido(self):
         ids = ["thinkingmachines/inkling:free", "thinkingmachines/inkling-small:free", "openai/gpt-oss-120b"]
         self.assertEqual(maestro._rank("groq", ids), ["openai/gpt-oss-120b"])
+
+
+class TestHealthConfig(unittest.TestCase):
+    def test_config_so_diz_presente_ou_ausente(self):
+        os.environ["COLAB_SECRET"] = "segredo-super-secreto-123"
+        try:
+            h = main.health()
+            self.assertIs(h["config"]["COLAB_SECRET"], True)
+            self.assertNotIn("segredo-super-secreto-123", str(h))
+        finally:
+            os.environ.pop("COLAB_SECRET", None)
+        self.assertIs(main.health()["config"]["COLAB_SECRET"], False)
