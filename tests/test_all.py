@@ -1045,3 +1045,18 @@ class TestArenaECustom(unittest.TestCase):
         finally:
             for k in ("CUSTOM_BASE_URL", "CUSTOM_API_KEY", "CUSTOM_MODEL"):
                 os.environ.pop(k, None)
+
+
+class TestInOrderToEArtigo(unittest.TestCase):
+    def test_in_order_to_vira_to_e_nao_junta_verbos(self):
+        for modo in ("auto", "agressivo"):
+            o = ttokem.compress("Please write a python script that can run in order to ship it, never delete data.",
+                                modo, "codigo")["text"]
+            self.assertNotIn("run ship", o.lower())
+            self.assertIn("to ship", o.lower())
+            self.assertIn("never delete", o.lower())
+
+    def test_sem_artigo_sobrando_antes_de_buildozer(self):
+        o, _ = ttokem.aplicar_dicionario("compiles into an android apk via buildozer.", "codigo")
+        self.assertNotIn("an buildozer", o)
+        self.assertIn("buildozer apk", o)

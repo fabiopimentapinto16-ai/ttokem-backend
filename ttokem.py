@@ -66,8 +66,8 @@ _FILLERS = [
     r"por favor", r"gostaria de", r"eu queria", r"voc[eê] poderia", r"poderia",
     r"na verdade", r"basicamente", r"ou seja", r"de certa forma", r"meio que",
     r"digamos que", r"sabe", r"please", r"kindly", r"basically", r"actually",
-    r"i would like to", r"could you", r"you know", r"in order to",
-]
+    r"i would like to", r"could you", r"you know",
+]   # "in order to" NÃO é enchimento: tirar apagava o "to" e juntava dois verbos ("run ship")
 _FILLER_RE = re.compile(r"\b(?:" + "|".join(_FILLERS) + r")\b[,]?\s*", re.IGNORECASE)
 
 # ------------------------------------------- dicionários por tipo (imagem/vídeo/código)
@@ -125,8 +125,8 @@ NHHC4F = {
     ],
     "TASK": [
         (("codigo",), r"\bpython script using fastapi\b", "fastapi script"),
-        (("codigo",), r"\bandroid apk via buildozer\b", "buildozer apk"),
-        (("codigo",), r"\bandroid apk\b", "apk"),
+        (("codigo",), r"\b(?:an? )?android apk via buildozer\b", "buildozer apk"),
+        (("codigo",), r"\b(?:an? )?android apk\b", "apk"),
     ],
     "CONTEXT": [
         (("codigo", "video", "imagem"), r"\bin order to\b", "to"),
@@ -337,6 +337,7 @@ muito bem lindo linda incrivel incrível perfeito perfeita""".split())
 
 def compress_agressivo(text: str, tipo=None):
     base = compress_light(text)
+    base = re.sub(r"\bin order to\b", "to_", base, flags=re.IGNORECASE)   # finalidade: mantém "to"
     base, _ = aplicar_dicionario(base, tipo)
     crit = set(extract_critical(text))
     palavras, vistas = [], set()
@@ -355,7 +356,8 @@ def compress_agressivo(text: str, tipo=None):
             vistas.add(chave)
             palavras.append(w.rstrip(".;"))
     out = re.sub(r"\s+([,.;:])", r"\1", " ".join(palavras))
-    out = re.sub(r"[,;]\s*(?=[,;])", "", out).strip(" ,;")
+    out = re.sub(r"[,;]\s*(?=[,;])", "", out).strip(" ,;").replace("to_", "to")
+    base = base.replace("to_", "to")
     if len(_RESTRICAO.findall(out)) < len(_RESTRICAO.findall(text)) or \
             any(c not in out for c in crit) or not semantica(text, out)["intacta"]:
         return base
