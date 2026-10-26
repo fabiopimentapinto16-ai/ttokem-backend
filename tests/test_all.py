@@ -1000,3 +1000,48 @@ class TestHealthConfig(unittest.TestCase):
         finally:
             os.environ.pop("COLAB_SECRET", None)
         self.assertIs(main.health()["config"]["COLAB_SECRET"], False)
+
+
+class TestArenaECustom(unittest.TestCase):
+    def _maestro(self, respostas, juiz="B"):
+        m = maestro.Maestro()
+        slots = [{"id": f"{n}#1:m", "name": n, "base": "http://x", "model": "m", "key": "k"} for n in respostas]
+        m.slots = lambda: slots
+        m._descobrir_todos = lambda: None
+        def tentar(s, msgs, mt, temp):
+            if msgs[0]["content"].startswith("Voce e um juiz"):
+                return juiz, None
+            r = respostas[s["name"]]
+            return (None, r) if r.startswith("ERRO") else (r, None)
+        m._tentar = tentar
+        return m
+
+    def test_arena_escolhe_pelo_juiz(self):
+        m = self._maestro({"groq": "resposta curta", "gemini": "resposta melhor e completa", "mistral": "outra"}, juiz="B")
+        t, ia, det = m.arena([{"role": "user", "content": "pergunta"}], n=3)
+        self.assertEqual(t, "resposta melhor e completa")
+        self.assertIn("arena 3", ia)
+        self.assertEqual(det["candidatas"], 3)
+
+    def test_arena_juiz_falha_vence_a_mais_completa(self):
+        m = self._maestro({"groq": "a", "gemini": "uma resposta bem mais longa"}, juiz="???")
+        t, ia, det = m.arena([{"role": "user", "content": "p"}], n=2)
+        self.assertEqual(t, "uma resposta bem mais longa")
+
+    def test_arena_com_uma_so_ia_viva(self):
+        m = self._maestro({"groq": "ok unica", "gemini": "ERRO 503"})
+        t, ia, det = m.arena([{"role": "user", "content": "p"}], n=2)
+        self.assertEqual(t, "ok unica")
+        self.assertEqual(det["candidatas"], 1)
+
+    def test_provedor_generico_so_com_base(self):
+        for k in ("CUSTOM_BASE_URL", "CUSTOM_API_KEY", "CUSTOM_MODEL"):
+            os.environ.pop(k, None)
+        self.assertNotIn("custom", maestro.provedores())
+        os.environ.update(CUSTOM_BASE_URL="https://meu.endpoint/v1/", CUSTOM_API_KEY="k", CUSTOM_MODEL="abc")
+        try:
+            s = [x for x in maestro.Maestro().slots() if x["name"] == "custom"]
+            self.assertEqual((s[0]["base"], s[0]["model"]), ("https://meu.endpoint/v1", "abc"))
+        finally:
+            for k in ("CUSTOM_BASE_URL", "CUSTOM_API_KEY", "CUSTOM_MODEL"):
+                os.environ.pop(k, None)

@@ -11,7 +11,7 @@ REPOS = [("App Android (APK)", "https://github.com/fabiopimentapinto16-ai/ttokem
          ("Backend (FastAPI)", "https://github.com/fabiopimentapinto16-ai/ttokem-backend")]
 
 
-def processar(prompt: str, modo: str, llm, idioma: str = "português") -> dict:
+def processar(prompt: str, modo: str, llm, idioma: str = "português", arena: int = 0) -> dict:
     t0 = time.perf_counter()
     modo = modo if modo in ("auto", "light", "agressivo", "v24") else "auto"
     cmd = comandos.analisar(prompt)
@@ -23,7 +23,8 @@ def processar(prompt: str, modo: str, llm, idioma: str = "português") -> dict:
             "modo": comp["mode"], "tokens_antes": comp["original_tokens"],
             "tokens_depois": comp["compressed_tokens"], "economia_pct": comp["saving_pct"],
             "dados_intactos": bool(comp.get("semantica", {}).get("intacta", True))}
-    chave = hashlib.sha1(f"{modo}|{idioma}|{cmd['mostrar']}|{enviado.lower()}".encode()).hexdigest()
+    arena = arena if arena >= 2 else 0
+    chave = hashlib.sha1(f"{modo}|{idioma}|{cmd['mostrar']}|{arena}|{enviado.lower()}".encode()).hexdigest()
     hit = CACHE.get(chave)
     if hit and hit[0] > time.time():
         base.update(cache="HIT", resposta=hit[1], ia=hit[2] + " (cache)")
@@ -31,8 +32,12 @@ def processar(prompt: str, modo: str, llm, idioma: str = "português") -> dict:
         sistema = ("Você é o assistente do Ttoken Studio. Responda em " + idioma +
                    ", claro e prático." + (" " + cmd["instrucao"] if cmd["instrucao"] else ""))
         texto = ttokem.expandir_presets(enviado) if "@" in enviado else enviado
-        resposta, ia = llm.chat([{"role": "system", "content": sistema},
-                                 {"role": "user", "content": texto}], max_tokens=1200)
+        msgs = [{"role": "system", "content": sistema}, {"role": "user", "content": texto}]
+        if arena:
+            resposta, ia, det = llm.arena(msgs, n=arena, max_tokens=1200)
+            base["arena"] = det
+        else:
+            resposta, ia = llm.chat(msgs, max_tokens=1200)
         CACHE[chave] = (time.time() + CACHE_TTL, resposta, ia)
         base.update(cache="MISS", resposta=resposta, ia=ia)
     base["latencia_ms"] = round((time.perf_counter() - t0) * 1000)
@@ -78,7 +83,7 @@ def sistema_info(rate_limit=None) -> dict:
         "modelos_prontos": {k: {"tipo": v["tipo"], "frases": len(v["frases"])}
                             for k, v in ttokem.PRESETS.items()},
         "comandos": comandos.catalogo(),
-        "provedores_texto": list(maestro.PROVIDERS),
+        "provedores_texto": list(maestro.provedores()),
     }
 
 
@@ -131,7 +136,9 @@ pre{white-space:pre-wrap;word-wrap:break-word;font:13px/1.6 monospace;color:#ccd
 <textarea id="p" placeholder="Ex: eu quero com eficiência esse código de login em Kivy"></textarea>
 <label>Motor: <select id="md" style="background:#000;color:#fff;border:1px solid var(--bd);border-radius:6px;padding:6px">
 <option value="auto">Seguro (padrão)</option><option value="agressivo">Agressivo (economiza mais, auditado)</option>
-<option value="light">Leve</option><option value="v24">Codebook V24 (risco: pode danificar a mensagem)</option></select></label><br>
+<option value="light">Leve</option><option value="v24">Codebook V24 (risco: pode danificar a mensagem)</option></select></label>
+<label style="margin-left:8px">Arena: <select id="ar" style="background:#000;color:#fff;border:1px solid var(--bd);border-radius:6px;padding:6px">
+<option value="0">Normal</option><option value="3">Melhor de 3 (gasta 3x a cota)</option><option value="5">Melhor de 5</option></select></label><br>
 <button id="b" onclick="run()">Executar</button><button class="s" id="v" onclick="video()">Gerar vídeo com esta ideia</button></div>
 <div class="c"><div class="l">Caminho (comandos)</div><div class="v" id="m1">-</div></div>
 <div class="c"><div class="l">Compressão</div><div class="v" id="m2">-</div></div>
@@ -147,12 +154,12 @@ const $=i=>document.getElementById(i);
 (function(){const q=new URLSearchParams(location.search);if(q.get('texto'))$('p').value=q.get('texto');if(q.get('modo'))$('md').value=q.get('modo')})();
 async function run(){const p=$('p').value.trim();if(!p)return;$('b').disabled=true;$('o').textContent='...';
 try{const r=await fetch('/api/painel',{method:'POST',headers:{'Content-Type':'application/json'},
-body:JSON.stringify({prompt:p,modo:$('md').value})});const d=await r.json();
+body:JSON.stringify({prompt:p,modo:$('md').value,arena:parseInt($('ar').value)})});const d=await r.json();
 if(!r.ok)throw new Error(d.detail||r.status);
 $('m1').textContent=d.comandos+' | '+d.tipo;
 $('m2').innerHTML=d.tokens_antes+' -> '+d.tokens_depois+' tokens ('+d.economia_pct+'%) <span class="'+(d.dados_intactos?'ok">dados intactos':'no">verificar')+'</span>';
 $('m3').textContent=d.cache+(d.cache==='HIT'?' (sem gastar IA)':' (novo)');
-$('m4').textContent=d.ia+' | '+d.latencia_ms+' ms';$('o').textContent=d.resposta;
+$('m4').textContent=d.ia+' | '+d.latencia_ms+' ms'+(d.arena?' | arena: '+d.arena.candidatas+' candidatas, juiz '+d.arena.juiz:'');$('o').textContent=d.resposta;
 }catch(e){$('o').textContent='Erro: '+e.message}finally{$('b').disabled=false}}
 async function video(){const p=$('p').value.trim();if(p.length<3)return;$('v').disabled=true;$('vd').textContent='enviando...';
 try{const r=await fetch('/api/gerar',{method:'POST',headers:{'Content-Type':'application/json'},
@@ -204,7 +211,7 @@ camada de cima: escolhe a IA, comprime o pedido sem perder dados, gera o vídeo 
 <div class="c"><span class="tag">STARTER</span><b>Grátis com o APK</b><small>Limite de uso de 50% da capacidade. Modo seguro e agressivo auditados.</small></div>
 <div class="c k"><span class="tag">PRO</span><b>R$ 10 (Brasil) · US$ 2 (exterior)</b><small>Sem o limite do Starter. Cobrança ainda não ativada: esta é só a estrutura planejada.</small></div></div>
 <h2>Camadas</h2><div class="g">
-<div class="c k"><span class="tag">NÚCLEO</span><b>Maestro de IAs</b><small>Troca sozinho de IA quando uma acaba o crédito. Descobre os modelos disponíveis. Aceita Beam (Reflection), Groq, Gemini, OpenRouter, Cerebras, Mistral e Hugging Face.</small></div>
+<div class="c k"><span class="tag">NÚCLEO</span><b>Maestro de IAs</b><small>Troca sozinho de IA quando uma acaba o crédito. Descobre os modelos disponíveis. Aceita Beam (Reflection), Groq, Gemini, OpenRouter, Cerebras, Mistral, Hugging Face e qualquer API compatível com OpenAI (provedor genérico).</small></div><div class="c"><span class="tag">ARENA</span><b>Melhor de 3 a 5</b><small>Várias IAs respondem a mesma tarefa e uma julga. Opcional: gasta de 3 a 5 vezes a cota grátis.</small></div>
 <div class="c"><span class="tag">COMPRESSÃO</span><b>Ttokem</b><small>Modo seguro (padrão) e agressivo. Auditoria que cancela a troca se um fato, número, verbo ou palavra de lógica sumir.</small></div>
 <div class="c"><span class="tag">ÁRVORE</span><b>Rua Neural v2</b><small>Modelos prontos em hierarquia, com restrições herdadas. Só troca frases praticamente idênticas.</small></div>
 <div class="c"><span class="tag">COMANDOS</span><b>/codigo /video /eficiente...</b><small>Escolhidos pela frase normal. Não alteram o seu texto.</small></div>

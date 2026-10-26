@@ -17,6 +17,7 @@ Variáveis de ambiente (todas opcionais; só os provedores com chave entram):
 Todos falam o protocolo OpenAI /chat/completions.
 """
 import os
+import re
 import threading
 import time
 
@@ -35,6 +36,18 @@ PROVIDERS = {
     # Hugging Face Inference Providers (HF_TOKEN): créditos mensais pequenos, fica por último
     "huggingface": ("https://router.huggingface.co/v1", "meta-llama/Llama-3.3-70B-Instruct"),
 }
+
+
+def provedores():
+    """PROVIDERS + 'custom' (qualquer API compatível com OpenAI: Beam, FreeLLMAPI, Ollama...).
+    Ligue com CUSTOM_BASE_URL, CUSTOM_API_KEY e (opcional) CUSTOM_MODEL."""
+    out = dict(PROVIDERS)
+    base = os.environ.get("CUSTOM_BASE_URL", "").strip().rstrip("/")
+    if base:
+        out["custom"] = (base, os.environ.get("CUSTOM_MODEL", "").strip() or "default")
+    return out
+
+
 LEGACY_KEYS = {"gemini": ["GOOGLE_API_KEY"],
                "huggingface": ["HF_TOKEN", "HF_API_KEY", "HUGGINGFACE_TOKEN"]}
 
@@ -92,12 +105,13 @@ class Maestro:
 
     # ----------------------------------------------------------- slots
     def slots(self):
+        prov = provedores()
         order = [n.strip() for n in os.environ.get("LLM_ORDER", "").split(",")
-                 if n.strip() in PROVIDERS]
-        order += [n for n in PROVIDERS if n not in order]
+                 if n.strip() in prov]
+        order += [n for n in prov if n not in order]
         out = []
         for name in order:
-            base, default_model = PROVIDERS[name]
+            base, default_model = prov[name]
             raw = (os.environ.get(f"{name.upper()}_MODELS")
                    or os.environ.get(f"{name.upper()}_MODEL")
                    or ",".join(self._disc.get(name, (0, []))[1]) or default_model)
@@ -230,6 +244,55 @@ class Maestro:
             self._last[s["id"]] = erro
             errors.append(f"{s['id']}: {erro}")
         raise AllProvidersFailed("; ".join(errors))
+
+    def arena(self, messages, n=3, max_tokens=900):
+        """Melhor de N: IAs de provedores DIFERENTES respondem a mesma tarefa e uma delas
+        julga. Gasta ~N vezes a cota. Retorna (texto, 'arena N: provedor/modelo', detalhes).
+        Se só uma IA responder, devolve essa; se o juiz falhar, vence a resposta mais completa."""
+        from concurrent.futures import ThreadPoolExecutor
+        n = max(2, min(int(n or 3), 5))
+        self._descobrir_todos()
+        slots = [s for s in self.slots() if self._cooling(s["id"]) <= 0]
+        escolhidos, vistos = [], set()
+        for s in slots:                                  # 1 slot por provedor
+            if s["name"] not in vistos:
+                vistos.add(s["name"])
+                escolhidos.append(s)
+            if len(escolhidos) == n:
+                break
+        if len(escolhidos) < 2:
+            texto, ia = self.chat(messages, max_tokens=max_tokens)
+            return texto, ia, {"candidatas": 1, "juiz": "n/a (so 1 IA livre)"}
+        with ThreadPoolExecutor(max_workers=len(escolhidos)) as pool:
+            res = list(pool.map(lambda s: (s, *self._tentar(s, messages, max_tokens, 0.7)),
+                                escolhidos))
+        ok = [(s, t) for s, t, e in res if t]
+        for s, t, e in res:
+            if e:
+                self._last[s["id"]] = e
+        if not ok:
+            raise AllProvidersFailed("; ".join(f"{s['id']}: {e}" for s, t, e in res))
+        if len(ok) == 1:
+            s, t = ok[0]
+            return t, f"{s['name']}/{s['model']}", {"candidatas": 1, "juiz": "n/a"}
+        pergunta = next((x["content"] for x in reversed(messages) if x.get("role") == "user"), "")
+        letras = "ABCDE"[:len(ok)]
+        bloco = "\n\n".join(f"[{letras[i]}]\n{t[:1500]}" for i, (s, t) in enumerate(ok))
+        juiz_msgs = [{"role": "system", "content": "Voce e um juiz imparcial. Escolha a melhor resposta "
+                      "(precisa, completa, clara, util). Responda APENAS com a letra."},
+                     {"role": "user", "content": f"TAREFA:\n{pergunta[:1500]}\n\nRESPOSTAS:\n{bloco}"}]
+        idx, juiz = None, "fallback (a mais completa)"
+        try:
+            voto, juiz_ia = self.chat(juiz_msgs, max_tokens=5, temperature=0)
+            mt = re.search(r"[A-E]", voto.upper())
+            if mt and mt.group(0) in letras:
+                idx, juiz = letras.index(mt.group(0)), juiz_ia
+        except AllProvidersFailed:
+            pass
+        if idx is None:
+            idx = max(range(len(ok)), key=lambda i: len(ok[i][1]))
+        s, t = ok[idx]
+        return t, f"arena {len(ok)}: {s['name']}/{s['model']}", {"candidatas": len(ok), "juiz": juiz}
 
     def testar(self):
         """Faz 1 chamada mínima por slot (ignora cooldown). Para o botão 'Testar chaves'."""

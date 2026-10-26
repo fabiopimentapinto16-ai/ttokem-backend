@@ -134,6 +134,7 @@ def health():
 class PainelReq(BaseModel):
     prompt: str = Field(min_length=2, max_length=4000)
     modo: str = "auto"       # auto (seguro) | agressivo
+    arena: int = 0           # 2..5 = "Melhor de N"
 
 
 @app.get("/api/prompts")
@@ -166,7 +167,7 @@ def painel_processar(req: PainelReq, request: Request):
     if not _limite(request):
         raise HTTPException(429, "Limite de pedidos por hora atingido.")
     try:
-        return painel.processar(req.prompt, req.modo, llm)
+        return painel.processar(req.prompt, req.modo, llm, arena=req.arena)
     except Exception as e:
         raise HTTPException(502, f"IA indisponível: {e}")
 
@@ -175,6 +176,7 @@ class ChatReq(BaseModel):
     mensagem: str = Field(min_length=1, max_length=4000)
     historico: list = []
     idioma: str = Field(default="", max_length=60)      # idioma da resposta (qualquer um)
+    arena: int = 0          # 0 = normal; 2..5 = "Melhor de N" (gasta ~N vezes a cota das IAs)
 
 
 @app.post("/api/chat")
@@ -195,10 +197,13 @@ def chat(req: ChatReq, request: Request):
         msgs[0]["content"] += " Instruções do pedido: " + cmd["instrucao"]
     msgs.append({"role": "user", "content": cmd["texto"] or req.mensagem.strip()})
     try:
-        texto, api = llm.chat(msgs, max_tokens=1500)
+        if req.arena >= 2:
+            texto, api, det = llm.arena(msgs, n=req.arena, max_tokens=1500)
+        else:
+            (texto, api), det = llm.chat(msgs, max_tokens=1500), None
     except Exception as e:
         raise HTTPException(502, f"IA indisponível: {e}")
-    return {"ok": True, "resposta": texto, "ia": api, "comandos": cmd["mostrar"]}
+    return {"ok": True, "resposta": texto, "ia": api, "comandos": cmd["mostrar"], "arena": det}
 
 
 class ColabReq(BaseModel):
