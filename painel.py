@@ -193,6 +193,7 @@ th{color:var(--mu);font-weight:500}.ok{color:var(--pr)}.no{color:#ff6b81}a{color
 .sq canvas{width:100%;max-width:360px;aspect-ratio:1;display:block;margin:6px auto;background:#04050a;border-radius:10px;border:1px solid var(--bd)}
 .l{font:11px monospace;color:var(--mu);text-transform:uppercase;letter-spacing:1px}
 code{word-break:break-all}.c{min-width:0;overflow-x:auto}
+canvas.m3d{display:block;width:100%;height:120px;margin:-4px 0 8px;background:radial-gradient(ellipse at 50% 40%,#10172a,#04050a);border-radius:8px;border:1px solid var(--bd)}
 </style></head><body><div class="w">
 <div class="tag">TTOKEM OS</div><h1>Um sistema aberto para <span>prompt, texto e vídeo</span></h1>
 <p>Camadas simples, cada uma testada. Os modelos de IA (como o Beam, da Reflection) são o núcleo; o TTOKEM OS é a
@@ -211,12 +212,13 @@ camada de cima: escolhe a IA, comprime o pedido sem perder dados, gera o vídeo 
 <div class="c"><span class="tag">STARTER</span><b>Grátis com o APK</b><small>Limite de uso de 50% da capacidade. Modo seguro e agressivo auditados.</small></div>
 <div class="c k"><span class="tag">PRO</span><b>R$ 10 (Brasil) · US$ 2 (exterior)</b><small>Sem o limite do Starter. Cobrança ainda não ativada: esta é só a estrutura planejada.</small></div></div>
 <h2>Camadas</h2><div class="g">
-<div class="c k"><span class="tag">NÚCLEO</span><b>Maestro de IAs</b><small>Troca sozinho de IA quando uma acaba o crédito. Descobre os modelos disponíveis. Aceita Beam (Reflection), Groq, Gemini, OpenRouter, Cerebras, Mistral, Hugging Face e qualquer API compatível com OpenAI (provedor genérico).</small></div><div class="c"><span class="tag">ARENA</span><b>Melhor de 3 a 5</b><small>Várias IAs respondem a mesma tarefa e uma julga. Opcional: gasta de 3 a 5 vezes a cota grátis.</small></div>
-<div class="c"><span class="tag">COMPRESSÃO</span><b>Ttokem</b><small>Modo seguro (padrão) e agressivo. Auditoria que cancela a troca se um fato, número, verbo ou palavra de lógica sumir.</small></div>
-<div class="c"><span class="tag">ÁRVORE</span><b>Rua Neural v2</b><small>Modelos prontos em hierarquia, com restrições herdadas. Só troca frases praticamente idênticas.</small></div>
-<div class="c"><span class="tag">COMANDOS</span><b>/codigo /video /eficiente...</b><small>Escolhidos pela frase normal. Não alteram o seu texto.</small></div>
-<div class="c"><span class="tag">VÍDEO</span><b>Maestro de vídeo</b><small>Vários geradores com plano B. O gerador nunca recebe o texto bruto.</small></div>
-<div class="c"><span class="tag">APP</span><b>Ttoken Studio (Android)</b><small>Gera, legenda e compartilha. APK compilado pelo GitHub Actions.</small></div>
+<div class="c k"><canvas class="m3d" data-m="maestro" aria-hidden="true"></canvas><span class="tag">NÚCLEO</span><b>Maestro de IAs</b><small>Troca sozinho de IA quando uma acaba o crédito. Descobre os modelos disponíveis. Aceita Beam (Reflection), Groq, Gemini, OpenRouter, Cerebras, Mistral, Hugging Face e qualquer API compatível com OpenAI (provedor genérico).</small></div><div class="c"><canvas class="m3d" data-m="arena" aria-hidden="true"></canvas><span class="tag">ARENA</span><b>Melhor de 3 a 5</b><small>Várias IAs respondem a mesma tarefa e uma julga. Opcional: gasta de 3 a 5 vezes a cota grátis.</small></div>
+<div class="c"><canvas class="m3d" data-m="compressao" aria-hidden="true"></canvas><span class="tag">COMPRESSÃO</span><b>Ttokem</b><small>Modo seguro (padrão) e agressivo. Auditoria que cancela a troca se um fato, número, verbo ou palavra de lógica sumir.</small></div>
+<div class="c"><canvas class="m3d" data-m="arvore" aria-hidden="true"></canvas><span class="tag">ÁRVORE</span><b>Rua Neural v2</b><small>Modelos prontos em hierarquia, com restrições herdadas. Só troca frases praticamente idênticas.</small></div>
+<div class="c"><canvas class="m3d" data-m="comandos" aria-hidden="true"></canvas><span class="tag">COMANDOS</span><b>/codigo /video /eficiente...</b><small>Escolhidos pela frase normal. Não alteram o seu texto.</small></div>
+<div class="c"><canvas class="m3d" data-m="video" aria-hidden="true"></canvas><span class="tag">VÍDEO</span><b>Maestro de vídeo</b><small>Vários geradores com plano B. O gerador nunca recebe o texto bruto.</small></div>
+<div class="c"><canvas class="m3d" data-m="app" aria-hidden="true"></canvas><span class="tag">APP</span><b>Ttoken Studio (Android)</b><small>Gera, legenda e compartilha. APK compilado pelo GitHub Actions.</small></div>
+<div class="c"><canvas class="m3d" data-m="cofre" aria-hidden="true"></canvas><span class="tag">COFRE</span><b>Cofre de moedas</b><small>Moedas grátis que você não usa no dia ficam guardadas no cofre (até 30 dias). Moedas compradas nunca expiram.</small></div>
 </div>
 <h2>Como funciona a Rua Neural</h2><div class="c" id="como">
 <ol style="margin-left:18px;color:var(--mu)">
@@ -292,7 +294,8 @@ if(reduz){pulsos=[];desenha(0)}else requestAnimationFrame(desenha);
 fetch('/api/prompts').then(r=>r.json()).then(b=>{
 const E=x=>String(x).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 document.getElementById('aviso').textContent=b.aviso;
-document.getElementById('mot').innerHTML=b.motores.map(m=>'<div class="c"><b>'+E(m.nome)+'</b><small>Economia: '+E(m.economia)+'<br>Risco: <span class="'+(m.risco.startsWith('ALTO')?'no':'ok')+'">'+E(m.risco)+'</span><br>'+E(m.perda)+'<br>'+E(m.quando)+'</small><br><a class="b s" href="/painel?modo='+m.id+'">Usar este motor</a></div>').join('');
+document.getElementById('mot').innerHTML=b.motores.map(m=>'<div class="c"><canvas class="m3d" data-m="'+E(m.id)+'" aria-hidden="true"></canvas><b>'+E(m.nome)+'</b><small>Economia: '+E(m.economia)+'<br>Risco: <span class="'+(m.risco.startsWith('ALTO')?'no':'ok')+'">'+E(m.risco)+'</span><br>'+E(m.perda)+'<br>'+E(m.quando)+'</small><br><a class="b s" href="/painel?modo='+m.id+'">Usar este motor</a></div>').join('');
+if(window.m3dIniciar)window.m3dIniciar();
 window._mods=b.modelos;
 document.getElementById('mod').innerHTML=b.modelos.map((m,i)=>'<div class="c"><span class="tag">MODELO PRONTO · '+E(m.tipo)+'</span><b>'+E(m.id)+'</b><small>'+m.frases+' frases · '+m.tokens_cheio+' → '+m.tokens_curto+' tokens ('+m.economia+' menos, sem perda)</small><pre style="white-space:pre-wrap;font:12px/1.5 monospace;color:#aab;max-height:120px;overflow:auto;margin-top:6px">'+E(m.prompt)+'</pre>'+
 '<button class="b s" data-i="'+i+'" data-k="p">Copiar prompt completo</button><button class="b s" data-i="'+i+'" data-k="r">Copiar '+E(m.referencia)+'</button><a class="b" href="/painel?texto='+encodeURIComponent(m.referencia)+'">Usar no painel</a></div>').join('');
@@ -302,4 +305,69 @@ navigator.clipboard.writeText(bt.dataset.k==='p'?m.prompt:m.referencia).then(()=
 fetch('/health').then(r=>r.json()).then(d=>{const a=d.ativos||{};
 document.getElementById('vivo').innerHTML='Versão <b>'+d.versao+'</b><br>IAs de texto ativas: <b>'+((a.texto||[]).join(', ')||'nenhuma configurada')+
 '</b><br>Geradores de vídeo: <b>'+((a.video||[]).join(', ')||'nenhum')+'</b>'}).catch(()=>{document.getElementById('vivo').textContent='Servidor indisponível agora.'});
+</script><script>
+(function(){
+const TAU=Math.PI*2,OURO='#ffc72b',PRATA='#c4c8d4',COBRE='#c27a3a',NEON='#00e5b8',VERM='#ff5a6e',AZUL='#6fa8ff';
+function sh(hex,f,w){const n=parseInt(hex.slice(1),16);let r=n>>16,g=n>>8&255,b=n&255;
+r=Math.min(255,r*f+(255-r*f)*(w||0));g=Math.min(255,g*f+(255-g*f)*(w||0));b=Math.min(255,b*f+(255-b*f)*(w||0));return 'rgb('+(r|0)+','+(g|0)+','+(b|0)+')'}
+// engrenagem maciça: camadas de espessura + face + bisel + cubo + raios (dentes trapezoidais)
+function gear(c,x,y,R,N,ang,col,dep){dep=dep==null?4:dep;const p=TAU/N,a=R*.13,d=R*.16;
+for(let k=dep;k>=0;k--){c.beginPath();const ox=x+k*.8,oy=y-k;
+for(let i=0;i<N;i++){for(const[da,rr]of[[-.27,R-d],[-.14,R+a],[.14,R+a],[.27,R-d]]){const t=ang+i*p+da*p;
+c[(i||da>-.3)?'lineTo':'moveTo'](ox+Math.cos(t)*rr,oy+Math.sin(t)*rr*.9)}}
+c.closePath();c.fillStyle=sh(col,k?.3+.12*(dep-k):.9);c.fill();if(!k){c.strokeStyle=sh(col,1,.35);c.lineWidth=.8;c.stroke()}}
+c.beginPath();c.ellipse(x,y,R*.78,R*.78*.9,0,0,TAU);c.fillStyle=sh(col,1,.15);c.fill();
+c.strokeStyle=sh(col,.22);c.lineWidth=Math.max(1.5,R*.07);c.beginPath();
+for(let j=0;j<5;j++){const t=ang+j*TAU/5;c.moveTo(x+Math.cos(t)*R*.38,y+Math.sin(t)*R*.38*.9);c.lineTo(x+Math.cos(t)*R*.78,y+Math.sin(t)*R*.78*.9)}c.stroke();
+c.beginPath();c.ellipse(x,y,R*.36,R*.36*.9,0,0,TAU);c.fillStyle=sh(col,.3);c.fill();
+c.beginPath();c.ellipse(x,y,R*.12,R*.12*.9,0,0,TAU);c.fillStyle=sh(col,1.1,.3);c.fill()}
+// filha encaixada no pai (phi = direção pai->filha)
+function fase(ap,Np,Nf,phi){return phi+Math.PI+(Math.PI-Np*(ap-phi))/Nf}
+function cubo(c,x,y,s,ax,ay,col,txt){const V=[];for(const X of[-1,1])for(const Y of[-1,1])for(const Z of[-1,1]){
+let x1=X,y1=Y*Math.cos(ax)-Z*Math.sin(ax),z1=Y*Math.sin(ax)+Z*Math.cos(ax);
+const x2=x1*Math.cos(ay)+z1*Math.sin(ay),z2=-x1*Math.sin(ay)+z1*Math.cos(ay);V.push([x2,y1,z2])}
+const F=[[0,1,3,2],[4,6,7,5],[0,4,5,1],[2,3,7,6],[0,2,6,4],[1,5,7,3]];
+const fs=F.map(f=>({f,z:f.reduce((s,i)=>s+V[i][2],0)/4,n:(()=>{const a=V[f[0]],b=V[f[1]],d=V[f[3]];return((b[0]-a[0])*(d[1]-a[1])-(b[1]-a[1])*(d[0]-a[0]))})()})).sort((p,q)=>q.z-p.z);
+for(const q of fs){c.beginPath();q.f.forEach((i,k)=>c[k?'lineTo':'moveTo'](x+V[i][0]*s,y+V[i][1]*s));c.closePath();
+c.fillStyle=sh(col,.35+.5*Math.abs(q.n)/4);c.fill();c.strokeStyle=sh(col,1,.4);c.lineWidth=1;c.stroke();
+if(txt&&q.z<0&&Math.abs(q.n)>2.2){const cx=q.f.reduce((s,i)=>s+V[i][0],0)/4,cy=q.f.reduce((s,i)=>s+V[i][1],0)/4;c.fillStyle='rgba(255,255,255,.85)';c.font='bold '+(s*.55|0)+'px monospace';c.textAlign='center';c.fillText(txt,x+cx*s,y+cy*s+s*.2)}}}
+function cil(c,x,y,r,l,ang,col){const g=c.createLinearGradient(x,y-r,x,y+r);g.addColorStop(0,sh(col,1.1,.3));g.addColorStop(.5,sh(col,.7));g.addColorStop(1,sh(col,.3));
+c.fillStyle=g;c.fillRect(x-l/2,y-r,l,2*r);c.strokeStyle=sh(col,.25);c.lineWidth=1.2;for(let i=0;i<6;i++){const yy=y-r+(((ang*r*1.2+i*r*.7)%(2*r)+2*r)%(2*r));c.beginPath();c.moveTo(x-l/2,yy);c.lineTo(x+l/2,yy);c.stroke()}}
+const T={
+auto(c,w,h,t){const a1=t*.9,R1=h*.30,R2=h*.20,x1=w*.36,x2=x1+R1+R2;gear(c,x1,h*.5,R1,14,a1,OURO);gear(c,x2,h*.5,R2,10,fase(a1,14,10,0),PRATA);
+const k=.5+.5*Math.sin(t*2);c.strokeStyle='rgba(0,229,184,'+(.4+.5*k)+')';c.lineWidth=3;c.beginPath();c.arc(w*.82,h*.5,h*.26,0,TAU);c.stroke();
+c.beginPath();c.moveTo(w*.82-h*.11,h*.5);c.lineTo(w*.82-h*.02,h*.5+h*.1);c.lineTo(w*.82+h*.13,h*.5-h*.1);c.stroke()},
+agressivo(c,w,h,t){gear(c,w*.24,h*.5,h*.36,16,t*2.2,OURO);const ph=(t*.6)%1,len=1-.65*Math.min(1,ph*1.4);
+for(let i=0;i<5;i++){const y=h*.2+i*h*.15,L=w*.42*(i%2?len:Math.max(.35,len+.1));c.fillStyle=sh(i%2?COBRE:PRATA,.85);c.fillRect(w*.5,y,L,h*.08);c.fillStyle='rgba(0,0,0,.35)';c.fillRect(w*.5,y+h*.08,L,2)}
+c.strokeStyle=VERM;c.lineWidth=2;const bx=w*.5+w*.42*len+4;c.beginPath();c.moveTo(bx,h*.12);c.lineTo(bx,h*.88);c.stroke()},
+light(c,w,h,t){gear(c,w*.5,h*.52,h*.3,12,t*.6,PRATA,3);for(let i=0;i<5;i++){const u=(t*.25+i*.2)%1;c.fillStyle='rgba(0,229,184,'+(1-u)*.6+')';c.beginPath();c.arc(w*(.2+i*.15),h*(.85-u*.7),2.5,0,TAU);c.fill()}},
+v24(c,w,h,t){const f=Math.sin(t*7)>.92;cubo(c,w*.5,h*.5,h*.3,t*.8,t*1.1,f?'#ff9aa8':VERM,'§ID');c.fillStyle='rgba(255,90,110,.8)';c.font='11px monospace';c.textAlign='left';c.fillText('códigos: risco alto',8,h-8)},
+maestro(c,w,h,t){const cx=w*.5,cy=h*.5,Rs=h*.17,Rp=h*.11,Rr=Rs+Rp*2+1;c.strokeStyle=sh(OURO,.5);c.lineWidth=3;c.beginPath();c.ellipse(cx,cy,Rr+h*.06,(Rr+h*.06)*.9,0,0,TAU);c.stroke();
+const as=t*.8;gear(c,cx,cy,Rs,10,as,OURO,3);for(let i=0;i<3;i++){const phi=t*.25+i*TAU/3,px=cx+Math.cos(phi)*(Rs+Rp),py=cy+Math.sin(phi)*(Rs+Rp)*.9;gear(c,px,py,Rp,8,fase(as,10,8,phi),PRATA,3)}},
+arena(c,w,h,t){const cx=w*.5,cy=h*.52,R=h*.2,r=h*.13,a=t*.7;for(let i=0;i<3;i++){const phi=-Math.PI/2+(i-1)*1.25,px=cx+Math.cos(phi)*(R+r),py=cy+Math.sin(phi)*(R+r)*.9;gear(c,px,py,r,9,fase(a,12,9,phi),[PRATA,COBRE,PRATA][i],3)}gear(c,cx,cy,R,12,a,OURO,4)},
+compressao(c,w,h,t){const ph=t*2;cil(c,w*.5,h*.28,h*.12,w*.18,ph,PRATA);cil(c,w*.5,h*.72,h*.12,w*.18,-ph,PRATA);
+for(let i=0;i<7;i++){const x=((t*40+i*w*.14)%(w*.98));const u=Math.min(1,Math.max(0,(x-w*.38)/(w*.24)));const th=h*.28*(1-.7*u);c.fillStyle=sh(u>.5?NEON:COBRE,.9);c.fillRect(x,h*.5-th/2,w*.1,th)}},
+arvore(c,w,h,t){const N=[[.5,.12],[.28,.38],[.72,.38],[.16,.7],[.4,.72],[.6,.72],[.84,.7],[.5,.92]],E=[[0,1],[0,2],[1,3],[1,4],[2,5],[2,6],[4,7],[5,7]];
+c.lineWidth=2;E.forEach(e=>{c.strokeStyle=sh(COBRE,.6);c.beginPath();c.moveTo(N[e[0]][0]*w,N[e[0]][1]*h);c.lineTo(N[e[1]][0]*w,N[e[1]][1]*h);c.stroke()});
+for(let k=0;k<4;k++){const u=(t*.5+k*.25)%1,e=E[(k*2+((t*.5+k*.25)|0))%6],x=(N[e[0]][0]+(N[e[1]][0]-N[e[0]][0])*u)*w,y=(N[e[0]][1]+(N[e[1]][1]-N[e[0]][1])*u)*h;const g=c.createRadialGradient(x,y,0,x,y,10);g.addColorStop(0,NEON);g.addColorStop(1,'rgba(0,229,184,0)');c.fillStyle=g;c.beginPath();c.arc(x,y,10,0,TAU);c.fill()}
+N.forEach((n,i)=>{const g=c.createRadialGradient(n[0]*w-2,n[1]*h-2,1,n[0]*w,n[1]*h,9);g.addColorStop(0,sh(i%2?PRATA:OURO,1,.4));g.addColorStop(1,sh(i%2?PRATA:OURO,.4));c.fillStyle=g;c.beginPath();c.arc(n[0]*w,n[1]*h,7,0,TAU);c.fill()})},
+comandos(c,w,h,t){cubo(c,w*.5,h*.5,h*.3,t*.7,t*.9,'#3fd6b0','/')},
+video(c,w,h,t){const cx=w*.38,cy=h*.5,R=h*.34;c.fillStyle=sh(PRATA,.4);c.beginPath();c.ellipse(cx,cy,R,R*.9,0,0,TAU);c.fill();c.fillStyle=sh(PRATA,.8);c.beginPath();c.ellipse(cx,cy-2,R,R*.9,0,0,TAU);c.fill();
+for(let i=0;i<6;i++){const a=t*1.2+i*TAU/6;c.fillStyle='#04050a';c.beginPath();c.ellipse(cx+Math.cos(a)*R*.55,cy-2+Math.sin(a)*R*.55*.9,R*.16,R*.14,0,0,TAU);c.fill()}
+for(let i=0;i<6;i++){const x=w*.62+((i*w*.1-t*30)%(w*.4)+w*.4)%(w*.4)-w*.05;c.fillStyle=sh(COBRE,.7);c.fillRect(x,h*.34,w*.08,h*.32);c.fillStyle='#04050a';c.fillRect(x+w*.02,h*.4,w*.04,h*.2)}},
+app(c,w,h,t){const pw=h*.5,x=w*.5-pw/2,y=h*.06,ph=h*.88;c.fillStyle='#0a0d16';c.strokeStyle=sh(PRATA,.9);c.lineWidth=2.5;c.beginPath();c.roundRect?c.roundRect(x,y,pw,ph,9):c.rect(x,y,pw,ph);c.fill();c.stroke();
+gear(c,w*.5,h*.38,pw*.26,10,t,OURO,3);gear(c,w*.5+pw*.2,h*.66,pw*.14,7,fase(t,10,7,Math.atan2(h*.28,pw*.2)),PRATA,2);
+const k=.5+.5*Math.sin(t*3);c.fillStyle='rgba(0,229,184,'+(.3+.5*k)+')';c.fillRect(x+pw*.2,y+ph*.9,pw*.6,3)},
+cofre(c,w,h,t){const cx=w*.5,cy=h*.5;[[.42,OURO,1],[.31,PRATA,-1.6],[.2,COBRE,2.4]].forEach(([r,col,v])=>{const R=h*r;c.fillStyle=sh(col,.45);c.beginPath();c.ellipse(cx,cy+3,R,R*.9,0,0,TAU);c.fill();c.fillStyle=sh(col,.85);c.beginPath();c.ellipse(cx,cy,R,R*.9,0,0,TAU);c.fill();
+c.strokeStyle='rgba(0,0,0,.55)';c.lineWidth=1.3;for(let i=0;i<24;i++){const a=t*v*.5+i*TAU/24;c.beginPath();c.moveTo(cx+Math.cos(a)*R*.86,cy+Math.sin(a)*R*.86*.9);c.lineTo(cx+Math.cos(a)*R,cy+Math.sin(a)*R*.9);c.stroke()}});
+c.fillStyle='#04050a';c.beginPath();c.ellipse(cx,cy,h*.09,h*.08,0,0,TAU);c.fill();c.fillStyle=OURO;c.fillRect(cx-2,cy-h*.5,4,h*.07)}
+};
+const vis=new Set(),io='IntersectionObserver'in window?new IntersectionObserver(es=>es.forEach(e=>e.isIntersecting?vis.add(e.target):vis.delete(e.target)),{rootMargin:'120px'}):null;
+const reduz=matchMedia('(prefers-reduced-motion: reduce)').matches;let ult=0;
+window.m3dIniciar=function(){document.querySelectorAll('canvas.m3d:not([data-ok])').forEach(cv=>{cv.dataset.ok=1;const dpr=Math.min(2,devicePixelRatio||1),W=cv.clientWidth||300,H=cv.clientHeight||120;cv.width=W*dpr;cv.height=H*dpr;cv._c=cv.getContext('2d');cv._c.scale(dpr,dpr);cv._w=W;cv._h=H;
+if(io)io.observe(cv);else vis.add(cv);if(reduz)pinta(cv,2.4)})};
+function pinta(cv,t){const c=cv._c,fn=T[cv.dataset.m]||T.maestro;c.clearRect(0,0,cv._w,cv._h);try{fn(c,cv._w,cv._h,t)}catch(e){}}
+function loop(ts){if(!document.hidden&&!reduz&&ts-ult>33){ult=ts;vis.forEach(cv=>pinta(cv,ts/1000))}requestAnimationFrame(loop)}
+window.m3dIniciar();requestAnimationFrame(loop);
+})();
 </script></body></html>"""
