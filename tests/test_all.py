@@ -1062,6 +1062,30 @@ class TestInOrderToEArtigo(unittest.TestCase):
         self.assertIn("buildozer apk", o)
 
 
+class TestFrasesVerbosas(unittest.TestCase):
+    def test_tira_cortesia_e_mantem_dados(self):
+        import ttokem
+        t = "Gostaria que você escrevesse o resumo em relação a fatura #4821, devido ao fato de que vence em 2026-11-05. Obrigado."
+        out, n = ttokem.aplicar_geral(t)
+        self.assertGreater(n, 0)
+        self.assertIn("#4821", out)
+        self.assertIn("2026-11-05", out)
+        self.assertLess(len(out), len(t))
+
+    def test_fail_closed_sem_nada_a_trocar(self):
+        import ttokem
+        t = "Gere um video de 5 segundos, sem texto."
+        self.assertEqual(ttokem.aplicar_geral(t), (t, 0))
+
+    def test_agressivo_continua_intacto(self):
+        import ttokem
+        t = "Please write a script, prior to the release 1.4.2, and do not delete main.py:120. Thank you."
+        out = ttokem.compress_agressivo(t)
+        self.assertTrue(ttokem.semantica(t, out)["intacta"])
+        self.assertIn("1.4.2", out)
+        self.assertIn("main.py:120", out)
+
+
 class TestAgnes(unittest.TestCase):
     def setUp(self):
         for k in list(os.environ):

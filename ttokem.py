@@ -335,11 +335,50 @@ overall simply just entire whole nice good great perfect perfectly smoothly smoo
 muito bem lindo linda incrivel incrível perfeito perfeita""".split())
 
 
+# Frases verbosas comuns (pt/en) -> equivalentes curtos de mesmo sentido. Passa pelo mesmo
+# auditor fail-closed: se um fato, verbo de acao, palavra de logica ou restricao sumir, e descartado.
+_GERAL = [(re.compile(a, re.IGNORECASE), b) for a, b in [
+    (r"\bem rela[cç][aã]o a\b", "sobre"), (r"\bdevido ao fato de que\b", "porque"),
+    (r"\ba fim de\b", "para"), (r"\bno momento atual\b", "agora"),
+    (r"\bem um futuro pr[oó]ximo\b", "em breve"), (r"\bfazer uso de\b", "usar"),
+    (r"\bleve em considera[cç][aã]o\b", "considere"), (r"\bpode me ajudar a\b", ""),
+    (r"\bse n[aã]o for incomodar,?\s*", ""), (r"\bdesde j[aá] (?:agrade[cç]o|obrigad[oa])\.?\s*", ""),
+    (r"\bmuito obrigad[oa]\.?\s*", ""), (r"\bobrigad[oa]\.?\s*", ""),
+    (r"\bgostaria que voc[eê]\s+", ""), (r"\bi was wondering if you could\s+", ""),
+    (r"\bthanks in advance\.?\s*", ""), (r"\bthank you(?: so much)?\.?\s*", ""),
+    (r"\bfeel free to\s+", ""), (r"\bin the event that\b", "if"),
+    (r"\bprior to\b", "before"), (r"\bsubsequent to\b", "after"),
+    (r"\ba (?:large )?number of\b", "several"), (r"\bin spite of the fact that\b", "although"),
+    (r"\bmake use of\b", "use"), (r"\btake into consideration\b", "consider"),
+    (r"\bis going to\b", "will"), (r"\bin the near future\b", "soon"),
+    (r"\bat the present time\b", "now"), (r"\bit is possible that\b", "may"),
+    (r"\bas well as\b", "and"), (r"\bin addition,?\s*", ""), (r"\bi need you to\s+", ""),
+]]
+
+
+def aplicar_geral(text: str):
+    """Aplica _GERAL; devolve (texto, n). Fail-closed: devolve o original se algo sumir."""
+    out, n = text, 0
+    for rx, novo in _GERAL:
+        out, k = rx.subn(novo, out)
+        n += k
+    out = re.sub(r"\s+([,.;:])", r"\1", re.sub(r"[ \t]{2,}", " ", out)).strip()
+    if n == 0:
+        return text, 0
+    if len(_RESTRICAO.findall(out)) < len(_RESTRICAO.findall(text)) or \
+            any(c not in out for c in extract_critical(text)) or not semantica(text, out)["intacta"]:
+        return text, 0
+    return out, n
+
+
+
 def compress_agressivo(text: str, tipo=None):
+    original = text
+    text, _ = aplicar_geral(text)
     base = compress_light(text)
     base = re.sub(r"\bin order to\b", "to_", base, flags=re.IGNORECASE)   # finalidade: mantém "to"
     base, _ = aplicar_dicionario(base, tipo)
-    crit = set(extract_critical(text))
+    crit = set(extract_critical(original))
     palavras, vistas = [], set()
     toks = [w for w in re.split(r"(\s+)", base) if w and not w.isspace()]
     for idx, w in enumerate(toks):
@@ -358,8 +397,8 @@ def compress_agressivo(text: str, tipo=None):
     out = re.sub(r"\s+([,.;:])", r"\1", " ".join(palavras))
     out = re.sub(r"[,;]\s*(?=[,;])", "", out).strip(" ,;").replace("to_", "to")
     base = base.replace("to_", "to")
-    if len(_RESTRICAO.findall(out)) < len(_RESTRICAO.findall(text)) or \
-            any(c not in out for c in crit) or not semantica(text, out)["intacta"]:
+    if len(_RESTRICAO.findall(out)) < len(_RESTRICAO.findall(original)) or \
+            any(c not in out for c in crit) or not semantica(original, out)["intacta"]:
         return base
     return out
 
